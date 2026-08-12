@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Plus, Trash2, Loader2, CheckCircle2, PackagePlus } from "lucide-react";
 import ComboBox from "../components/ui/ComboBox";
 import AddMasterModal from "../components/ui/AddMasterModal";
@@ -72,7 +72,7 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
   const [status, setStatus] = useState(null); // { type: 'success'|'error', message }
   const [loadingOrderId, setLoadingOrderId] = useState(true);
 
-  async function loadOrderId() {
+  const loadOrderId = useCallback(async () => {
     setLoadingOrderId(true);
     try {
       const id = await fetchNextOrderId();
@@ -82,9 +82,9 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
     } finally {
       setLoadingOrderId(false);
     }
-  }
+  }, []);
 
-  async function loadExistingOrder(id) {
+  const loadExistingOrder = useCallback(async (id) => {
     setLoadingOrderId(true);
     setStatus(null);
     try {
@@ -126,17 +126,15 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
     } finally {
       setLoadingOrderId(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      if (editOrderId) {
-        void loadExistingOrder(editOrderId);
-      } else {
-        void loadOrderId();
-      }
-    });
-  }, [editOrderId]);
+    if (editOrderId) {
+      loadExistingOrder(editOrderId);
+    } else {
+      loadOrderId();
+    }
+  }, [editOrderId, loadExistingOrder, loadOrderId]);
 
   const totals = useMemo(() => sumItemTotals(items), [items]);
 

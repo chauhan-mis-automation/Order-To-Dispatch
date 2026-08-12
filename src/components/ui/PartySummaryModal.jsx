@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 import { X, Building2 } from "lucide-react";
 
 const STATUS_BADGE = {

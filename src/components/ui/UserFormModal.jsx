@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, Loader2, UserCog } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -17,25 +17,14 @@ export default function UserFormModal({ open, user, onClose, onSaved }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!open) return;
-
-    const nextState = {
-      username: user?.username || "",
-      password: "",
-      name: user?.name || "",
-      roles: user?.roles || [],
-      isActive: user?.is_active ?? true,
-      error: "",
-    };
-
-    queueMicrotask(() => {
-      setUsername(nextState.username);
-      setPassword(nextState.password);
-      setName(nextState.name);
-      setRoles(nextState.roles);
-      setIsActive(nextState.isActive);
-      setError(nextState.error);
-    });
+    if (open) {
+      setUsername(user?.username || "");
+      setPassword("");
+      setName(user?.name || "");
+      setRoles(user?.roles || []);
+      setIsActive(user?.is_active ?? true);
+      setError("");
+    }
   }, [open, user]);
 
   if (!open) return null;

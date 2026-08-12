@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X } from "lucide-react";
 
 /**
@@ -10,11 +10,7 @@ export default function AddMasterModal({ open, title, onClose, onSubmit }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-
-    queueMicrotask(() => {
-      setValue("");
-    });
+    if (open) setValue("");
   }, [open]);
 
   if (!open) return null;

@@ -1,3 +1,4 @@
+import React from "react";
 import { HelpCircle } from "lucide-react";
 
 export default function ConfirmDialog({ open, title, message, confirmLabel = "Yes", onConfirm, onCancel }) {

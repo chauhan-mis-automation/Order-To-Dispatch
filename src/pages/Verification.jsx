@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Eye, Pencil, ChevronDown, RotateCcw, FileSpreadsheet, Loader2, Search,
   CheckCircle2, PauseCircle, XCircle,
@@ -6,8 +6,9 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
-import AuthModal from "../components/ui/AuthModal";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
+import { checkFgShortfall } from "../utils/stockCheck";
 
 const STATUSES = ["Pending", "Indent Raised", "On Hold"];
 
@@ -24,7 +25,7 @@ function formatDate(d) {
   return date.toLocaleDateString("en-GB").replace(/\//g, "/");
 }
 
-export default function Verification({ onEditOrder }) {
+export default function Verification({ currentUser, onEditOrder }) {
   const master = useMasterData();
 
   const [orders, setOrders] = useState([]);
@@ -40,10 +41,9 @@ export default function Verification({ onEditOrder }) {
   const [viewOrderId, setViewOrderId] = useState(null);
 
   const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus }
-  const [authOpen, setAuthOpen] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase
@@ -58,13 +58,11 @@ export default function Verification({ onEditOrder }) {
       setOrders(data || []);
     }
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      void loadOrders();
-    });
-  }, []);
+    loadOrders();
+  }, [loadOrders]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
@@ -90,29 +88,78 @@ export default function Verification({ onEditOrder }) {
   function requestAction(orderId, newStatus) {
     setOpenMenuId(null);
     setPendingAction({ orderId, newStatus });
-    setAuthOpen(true);
   }
 
-  async function handleAuthSuccess(user) {
-    if (!pendingAction) {
-      setAuthOpen(false);
-      return;
-    }
+  async function confirmPendingAction() {
+    if (!pendingAction) return;
     setActionBusy(true);
     const { orderId, newStatus } = pendingAction;
-    const payload = { status: newStatus };
-    if (newStatus === "Confirmed") {
-      payload.approved_by = user.name;
-      payload.approved_at = new Date().toISOString();
-    }
-    const { error } = await supabase.from("orders").update(payload).eq("order_id", orderId);
-    setActionBusy(false);
-    setAuthOpen(false);
-    setPendingAction(null);
-    if (error) {
-      setErrorMsg("Failed to update: " + error.message);
-    } else {
-      void loadOrders();
+
+    try {
+      if (newStatus === "Confirmed") {
+        // Approve: run the automatic FG stock check before deciding the final status
+        const { data: items, error: itemsErr } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("order_id", orderId);
+        if (itemsErr) throw itemsErr;
+
+        const shortfalls = await checkFgShortfall(items || []);
+
+        if (shortfalls.length === 0) {
+          // fully covered by stock — approve straight through
+          const { error } = await supabase
+            .from("orders")
+            .update({ status: "Confirmed", approved_by: currentUser, approved_at: new Date().toISOString() })
+            .eq("order_id", orderId);
+          if (error) throw error;
+        } else {
+          // not enough stock — approve but route to Indent, and open a production job
+          // for the shortfall quantity only.
+          const { error: orderErr } = await supabase
+            .from("orders")
+            .update({ status: "Indent Raised", approved_by: currentUser, approved_at: new Date().toISOString() })
+            .eq("order_id", orderId);
+          if (orderErr) throw orderErr;
+
+          // Each item gets its OWN production job — different products (e.g.
+          // Blockboard vs Plywood) run on different lines in real factories,
+          // so they must be schedulable independently in PPC.
+          for (let i = 0; i < shortfalls.length; i++) {
+            const s = shortfalls[i];
+            const jobNumber = `JOB-${orderId.split("/").pop()}-${Date.now().toString().slice(-5)}${i}`;
+            const { data: jobRow, error: jobErr } = await supabase
+              .from("production_jobs")
+              .insert({ job_number: jobNumber, order_id: orderId, status: "Pending Material" })
+              .select()
+              .single();
+            if (jobErr) throw jobErr;
+
+            const { error: jobItemsErr } = await supabase.from("production_job_items").insert({
+              job_id: jobRow.id,
+              item_name: s.item_name,
+              brand: s.brand,
+              size: s.size,
+              thickness: s.thickness,
+              qty: s.shortQty,
+            });
+            if (jobItemsErr) throw jobItemsErr;
+          }
+        }
+      } else {
+        // Hold / Cancel — unchanged, direct status update
+        const { error } = await supabase
+          .from("orders")
+          .update({ status: newStatus })
+          .eq("order_id", orderId);
+        if (error) throw error;
+      }
+      loadOrders();
+    } catch (err) {
+      setErrorMsg("Failed to update: " + err.message);
+    } finally {
+      setActionBusy(false);
+      setPendingAction(null);
     }
   }
 
@@ -350,13 +397,19 @@ export default function Verification({ onEditOrder }) {
 
       <OrderItemsModal orderId={viewOrderId} onClose={() => setViewOrderId(null)} />
 
-      <AuthModal
-        open={authOpen}
-        onClose={() => { setAuthOpen(false); setPendingAction(null); }}
-        onSuccess={handleAuthSuccess}
+      <ConfirmDialog
+        open={!!pendingAction}
         title="Confirm Status Change"
-        subtitle={pendingAction ? `Update ${pendingAction.orderId} to "${pendingAction.newStatus}"` : ""}
-        submitLabel={actionBusy ? "Updating..." : "Confirm"}
+        message={
+          pendingAction
+            ? pendingAction.newStatus === "Confirmed"
+              ? `Approve ${pendingAction.orderId} — stock will be checked automatically.`
+              : `Update ${pendingAction.orderId} to "${pendingAction.newStatus}"?`
+            : ""
+        }
+        confirmLabel={actionBusy ? "Updating..." : "Confirm"}
+        onConfirm={confirmPendingAction}
+        onCancel={() => setPendingAction(null)}
       />
     </div>
   );

@@ -1,40 +1,27 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { CalendarCheck, X, Loader2 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * Combines the old two-step flow (auth prompt -> date prompt) into a single
- * form: User ID, Password, and Dispatch Date together. On success it stamps
- * plan_dispatch_date + approved_by/approved_at on the order.
+ * Set/edit an order's plan dispatch date. Stamped with the current
+ * logged-in session user — no separate re-authentication needed.
  */
-export default function PlanDateModal({ open, orderId, existingDate, onClose, onSaved }) {
-  const [userId, setUserId] = useState("");
-  const [password, setPassword] = useState("");
+export default function PlanDateModal({ open, orderId, existingDate, currentUser, onClose, onSaved }) {
   const [date, setDate] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!open) return;
-
-    const timer = window.setTimeout(() => {
+    if (open) {
       setDate(existingDate || new Date().toISOString().split("T")[0]);
-      setUserId("");
-      setPassword("");
       setError("");
-    }, 0);
-
-    return () => window.clearTimeout(timer);
+    }
   }, [open, existingDate]);
 
   if (!open) return null;
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!userId.trim() || !password.trim()) {
-      setError("User ID and Password are required.");
-      return;
-    }
     if (!date) {
       setError("Please select a date.");
       return;
@@ -42,23 +29,11 @@ export default function PlanDateModal({ open, orderId, existingDate, onClose, on
     setLoading(true);
     setError("");
     try {
-      const { data, error: rpcError } = await supabase.rpc("login_user", {
-        p_username: userId.trim(),
-        p_password: password,
-      });
-      if (rpcError) throw rpcError;
-      if (!data || data.length === 0) {
-        setError("Invalid ID or Password.");
-        setLoading(false);
-        return;
-      }
-      const user = data[0];
-
       const { error: updateError } = await supabase
         .from("orders")
         .update({
           plan_dispatch_date: date,
-          approved_by: user.name,
+          approved_by: currentUser,
           approved_at: new Date().toISOString(),
         })
         .eq("order_id", orderId);
@@ -84,12 +59,6 @@ export default function PlanDateModal({ open, orderId, existingDate, onClose, on
         <form onSubmit={handleSubmit}>
           <label className="pdm-label">Dispatch Date</label>
           <input type="date" className="pdm-input" value={date} onChange={(e) => setDate(e.target.value)} />
-
-          <label className="pdm-label">User ID</label>
-          <input className="pdm-input" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="Enter ID" />
-
-          <label className="pdm-label">Password</label>
-          <input type="password" className="pdm-input" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter Password" />
 
           {error && <div className="pdm-error">{error}</div>}
 

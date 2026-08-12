@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   LayoutGrid,
   CheckCircle2,
@@ -14,6 +14,14 @@ import {
   Boxes,
   LogOut,
   Users,
+  FlaskConical,
+  Package,
+  ClipboardList,
+  ShoppingCart,
+  Tag,
+  ListChecks,
+  ClipboardCheck,
+  Factory,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -26,6 +34,10 @@ import {
 
 const PIPELINE = [
   { id: "verification", label: "Verification", icon: CheckCircle2, count: 12 },
+  { id: "indent", label: "Indent", icon: FlaskConical, count: 0 },
+  { id: "ppc", label: "PPC (Planning)", icon: ListChecks, count: 0 },
+  { id: "production_floor", label: "Production", icon: Factory, count: 0 },
+  { id: "qc", label: "QC", icon: ClipboardCheck, count: 0 },
   { id: "picking", label: "Picking", icon: ShoppingBasket, count: 7 },
   { id: "planning", label: "Planning", icon: CalendarClock, count: 4 },
   { id: "packing", label: "Packing", icon: PackageCheck, count: 3 },
@@ -47,6 +59,7 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const railRefs = useRef({});
 
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 40);
@@ -54,14 +67,21 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setMobileOpen(false);
-    }, 0);
-
-    return () => window.clearTimeout(timer);
+    setMobileOpen(false);
   }, [active]);
 
-  const allNavItems = [...STANDALONE, ...PIPELINE, ...TAIL, { id: "users", label: "User Management" }];
+  const allNavItems = [
+    ...STANDALONE,
+    ...PIPELINE,
+    ...TAIL,
+    { id: "users", label: "User Management" },
+    { id: "raw_materials", label: "Raw Materials" },
+    { id: "fg_items", label: "FG Items" },
+    { id: "bom_setup", label: "BOM Setup" },
+    { id: "fg_stock", label: "FG Stock" },
+    { id: "rm_stock", label: "RM Stock" },
+    { id: "purchase_orders", label: "Purchase Orders" },
+  ];
 
   return (
     <div className="o2d-root">
@@ -608,6 +628,42 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
                 active={active === "users"}
                 onClick={() => setActive("users")}
                 delay={mounted ? (PIPELINE.length + TAIL.length + 3) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "raw_materials", label: "Raw Materials", icon: Package }}
+                active={active === "raw_materials"}
+                onClick={() => setActive("raw_materials")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 4) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "fg_items", label: "FG Items", icon: Tag }}
+                active={active === "fg_items"}
+                onClick={() => setActive("fg_items")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 4.5) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "bom_setup", label: "BOM Setup", icon: ClipboardList }}
+                active={active === "bom_setup"}
+                onClick={() => setActive("bom_setup")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 5) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "fg_stock", label: "FG Stock", icon: Boxes }}
+                active={active === "fg_stock"}
+                onClick={() => setActive("fg_stock")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 6) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "rm_stock", label: "RM Stock", icon: FlaskConical }}
+                active={active === "rm_stock"}
+                onClick={() => setActive("rm_stock")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 7) * 40 : 0}
+              />
+              <NavItem
+                item={{ id: "purchase_orders", label: "Purchase Orders", icon: ShoppingCart }}
+                active={active === "purchase_orders"}
+                onClick={() => setActive("purchase_orders")}
+                delay={mounted ? (PIPELINE.length + TAIL.length + 8) * 40 : 0}
               />
             </>
           )}

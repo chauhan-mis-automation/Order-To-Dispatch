@@ -87,11 +87,7 @@ export function useMasterData() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void fetchAll();
-    }, 0);
-
-    return () => window.clearTimeout(timer);
+    fetchAll();
   }, [fetchAll]);
 
   const addNew = useCallback(

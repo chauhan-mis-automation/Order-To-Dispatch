@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Eye, Pencil, RotateCcw, FileSpreadsheet, Loader2, Search } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Eye, Pencil, RotateCcw, FileSpreadsheet, Loader2, Search, Truck } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
@@ -31,7 +31,7 @@ export default function Dispatch({ currentUser, requireLogin }) {
   const [viewOrderId, setViewOrderId] = useState(null);
   const [dispatchOrder, setDispatchOrder] = useState(null); // full order object
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase
@@ -42,13 +42,9 @@ export default function Dispatch({ currentUser, requireLogin }) {
     if (error) setErrorMsg(error.message);
     else setOrders(data || []);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadOrders();
-    });
   }, []);
+
+  useEffect(() => { loadOrders(); }, [loadOrders]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {

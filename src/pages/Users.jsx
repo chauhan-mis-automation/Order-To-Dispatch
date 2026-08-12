@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { UserPlus, Pencil, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import UserFormModal from "../components/ui/UserFormModal";
@@ -10,20 +10,16 @@ export default function Users() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase.rpc("admin_list_users");
     if (error) setErrorMsg(error.message);
     else setUsers(data || []);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadUsers();
-    });
   }, []);
+
+  useEffect(() => { loadUsers(); }, [loadUsers]);
 
   function openAdd() {
     setEditingUser(null);

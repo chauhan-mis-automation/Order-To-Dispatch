@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Eye, ClipboardList, RotateCcw, FileSpreadsheet, Loader2, Search, BarChart3,
 } from "lucide-react";
@@ -48,7 +48,7 @@ export default function History() {
   const [varianceOrderId, setVarianceOrderId] = useState(null);
   const [showSummary, setShowSummary] = useState(false);
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase
@@ -58,13 +58,9 @@ export default function History() {
     if (error) setErrorMsg(error.message);
     else setOrders(data || []);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadOrders();
-    });
   }, []);
+
+  useEffect(() => { loadOrders(); }, [loadOrders]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {

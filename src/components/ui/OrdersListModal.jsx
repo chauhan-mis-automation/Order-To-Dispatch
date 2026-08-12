@@ -1,3 +1,4 @@
+import React from "react";
 import { X, Eye } from "lucide-react";
 
 const STATUS_STYLES = {

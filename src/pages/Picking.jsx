@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Eye, Printer, ChevronDown, RotateCcw, FileSpreadsheet, Loader2, Search,
   PackageCheck, AlertTriangle,
@@ -6,7 +6,6 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
-import AuthModal from "../components/ui/AuthModal";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PlanDateModal from "../components/ui/PlanDateModal";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
@@ -25,7 +24,7 @@ function formatDate(d) {
   return date.toLocaleDateString("en-GB");
 }
 
-export default function Picking() {
+export default function Picking({ currentUser }) {
   const master = useMasterData();
 
   const [orders, setOrders] = useState([]);
@@ -41,12 +40,11 @@ export default function Picking() {
   const [viewOrderId, setViewOrderId] = useState(null);
 
   const [confirmTarget, setConfirmTarget] = useState(null); // orderId pending "Picked" confirm
-  const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus } needing auth
-  const [authOpen, setAuthOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus } needing confirm
   const [printingId, setPrintingId] = useState(null);
   const [planDateTarget, setPlanDateTarget] = useState(null); // { orderId, existingDate }
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase
@@ -58,13 +56,11 @@ export default function Picking() {
     if (error) setErrorMsg(error.message);
     else setOrders(data || []);
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      void loadOrders();
-    });
-  }, []);
+    loadOrders();
+  }, [loadOrders]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
@@ -98,21 +94,19 @@ export default function Picking() {
     else loadOrders();
   }
 
-  // "Missing (Indent Raised)" — requires login confirmation, same as Verification actions
+  // "Missing (Indent Raised)" — simple confirm, stamped with the logged-in session user
   function requestIndent(orderId) {
     setOpenMenuId(null);
     setPendingAction({ orderId, newStatus: "Indent Raised" });
-    setAuthOpen(true);
   }
 
-  async function handleAuthSuccess(user) {
-    if (!pendingAction) { setAuthOpen(false); return; }
+  async function confirmIndent() {
+    if (!pendingAction) return;
     const { orderId, newStatus } = pendingAction;
     const { error } = await supabase
       .from("orders")
-      .update({ status: newStatus, approved_by: user.name, approved_at: new Date().toISOString() })
+      .update({ status: newStatus, approved_by: currentUser, approved_at: new Date().toISOString() })
       .eq("order_id", orderId);
-    setAuthOpen(false);
     setPendingAction(null);
     if (error) setErrorMsg("Failed to update: " + error.message);
     else loadOrders();
@@ -367,6 +361,7 @@ export default function Picking() {
         open={!!planDateTarget}
         orderId={planDateTarget?.orderId}
         existingDate={planDateTarget?.existingDate}
+        currentUser={currentUser}
         onClose={() => setPlanDateTarget(null)}
         onSaved={() => { setPlanDateTarget(null); loadOrders(); }}
       />
@@ -380,13 +375,13 @@ export default function Picking() {
         onCancel={() => setConfirmTarget(null)}
       />
 
-      <AuthModal
-        open={authOpen}
-        onClose={() => { setAuthOpen(false); setPendingAction(null); }}
-        onSuccess={handleAuthSuccess}
+      <ConfirmDialog
+        open={!!pendingAction}
         title="Confirm Status Change"
-        subtitle={pendingAction ? `Mark ${pendingAction.orderId} as "${pendingAction.newStatus}"` : ""}
-        submitLabel="Confirm"
+        message={pendingAction ? `Mark ${pendingAction.orderId} as "${pendingAction.newStatus}"?` : ""}
+        confirmLabel="Confirm"
+        onConfirm={confirmIndent}
+        onCancel={() => setPendingAction(null)}
       />
     </div>
   );

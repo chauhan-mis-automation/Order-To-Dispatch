@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { X, Plus, Trash2, Loader2, Truck } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { useMasterData } from "../../hooks/useMasterData";
@@ -33,12 +33,13 @@ function keyFor(row) {
   return `${row.itemName}_${row.brand || ""}_${row.size}_${row.thickness}`.toUpperCase();
 }
 
-export default function DispatchModal({ order, requireLogin, onClose, onDispatched }) {
+export default function DispatchModal({ order, currentUser, requireLogin, onClose, onDispatched }) {
   const master = useMasterData();
 
   const [loading, setLoading] = useState(true);
   const [originalItems, setOriginalItems] = useState([]); // immutable baseline for variance calc
   const [rows, setRows] = useState([]);
+  const [fgStock, setFgStock] = useState([]);
   const [truckNo, setTruckNo] = useState("");
   const [billAmount, setBillAmount] = useState("");
   const [newItemName, setNewItemName] = useState("");
@@ -50,17 +51,21 @@ export default function DispatchModal({ order, requireLogin, onClose, onDispatch
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const { data, error: err } = await supabase.from("order_items").select("*").eq("order_id", order.order_id);
+      const [itemsRes, fgRes] = await Promise.all([
+        supabase.from("order_items").select("*").eq("order_id", order.order_id),
+        supabase.from("fg_stock").select("*"),
+      ]);
       if (cancelled) return;
-      if (err) {
-        setError(err.message);
+      if (itemsRes.error) {
+        setError(itemsRes.error.message);
       } else {
-        setOriginalItems(data || []);
-        setRows((data || []).map(toDispatchRow).map((r) => {
+        setOriginalItems(itemsRes.data || []);
+        setRows((itemsRes.data || []).map(toDispatchRow).map((r) => {
           const calc = calculateItemWeight({ itemName: r.itemName, size: r.size, thickness: r.thickness, qty: r.qty });
           return { ...r, na: calc.na, weightTon: calc.weightTon, sqMtr: calc.sqMtr };
         }));
       }
+      setFgStock(fgRes.data || []);
       setTruckNo(order.truck_no || "");
       setBillAmount(order.bill_amount || "");
       setLoading(false);
@@ -187,6 +192,27 @@ export default function DispatchModal({ order, requireLogin, onClose, onDispatch
         if (insErr) throw insErr;
       }
 
+      // deduct dispatched quantities from finished-goods stock
+      for (const r of rows) {
+        const qtyDispatched = Number(r.qty) || 0;
+        if (qtyDispatched <= 0) continue;
+        const { data: fgRow } = await supabase
+          .from("fg_stock")
+          .select("*")
+          .eq("item_name", r.itemName)
+          .eq("brand", r.brand || "")
+          .eq("size", r.size)
+          .eq("thickness", r.thickness)
+          .maybeSingle();
+        if (fgRow) {
+          const newQty = Math.max(0, Number(fgRow.qty_available) - qtyDispatched);
+          await supabase
+            .from("fg_stock")
+            .update({ qty_available: newQty, updated_at: new Date().toISOString() })
+            .eq("id", fgRow.id);
+        }
+      }
+
       setSaving(false);
       onDispatched && onDispatched();
     } catch (err) {
@@ -268,6 +294,18 @@ export default function DispatchModal({ order, requireLogin, onClose, onDispatch
                   <div>
                     <span className="dm-field-label">Pcs</span>
                     <input type="number" className="dm-qty-input" value={row.qty} onChange={(e) => updateRow(row.id, "qty", e.target.value)} />
+                    {(() => {
+                      const stockRow = fgStock.find(
+                        (f) => f.item_name === row.itemName && (f.brand || "") === (row.brand || "") && f.size === row.size && f.thickness === row.thickness
+                      );
+                      const available = stockRow ? Number(stockRow.qty_available) : 0;
+                      const over = (Number(row.qty) || 0) > available;
+                      return (
+                        <div className={`dm-stock-hint ${over ? "dm-stock-over" : ""}`}>
+                          Stock: {available} {over ? "⚠️ exceeds stock" : ""}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div>
                     <span className="dm-field-label">Sq.M</span>
@@ -364,6 +402,8 @@ export default function DispatchModal({ order, requireLogin, onClose, onDispatch
           width: 100%; box-sizing: border-box; border: 1px solid #e1e3ec; border-radius: 9px; padding: 9px 10px; font-size: 13px; outline: none;
         }
         .dm-qty-input:focus, .dm-remark-input:focus { border-color: #f5a623; box-shadow: 0 0 0 3px rgba(245,166,35,0.15); }
+        .dm-stock-hint { font-size: 10px; color: #9295a8; margin-top: 4px; font-family: 'IBM Plex Mono', monospace; }
+        .dm-stock-over { color: #c23c33; font-weight: 700; }
         .dm-readonly {
           background: #f1f2f6; border: 1px solid #e6e8f0; border-radius: 9px; padding: 9px 10px; font-size: 12.5px;
           color: #5b5f72; font-family: 'IBM Plex Mono', monospace; text-align: right;

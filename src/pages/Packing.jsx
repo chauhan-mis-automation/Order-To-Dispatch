@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Eye, RotateCcw, FileSpreadsheet, Loader2, Search, PackageCheck } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
@@ -31,7 +31,7 @@ export default function Packing() {
   const [viewOrderId, setViewOrderId] = useState(null);
   const [confirmTarget, setConfirmTarget] = useState(null);
 
-  async function loadOrders() {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
     const { data, error } = await supabase
@@ -42,13 +42,9 @@ export default function Packing() {
     if (error) setErrorMsg(error.message);
     else setOrders(data || []);
     setLoading(false);
-  }
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      void loadOrders();
-    });
   }, []);
+
+  useEffect(() => { loadOrders(); }, [loadOrders]);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
