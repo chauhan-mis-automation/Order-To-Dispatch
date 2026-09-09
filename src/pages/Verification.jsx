@@ -8,7 +8,6 @@ import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
-import { checkFgShortfall } from "../utils/stockCheck";
 
 const STATUSES = ["Pending", "Indent Raised", "On Hold"];
 
@@ -41,6 +40,7 @@ export default function Verification({ currentUser, onEditOrder }) {
   const [viewOrderId, setViewOrderId] = useState(null);
 
   const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus }
+  const [stockWarnings, setStockWarnings] = useState([]);
   const [actionBusy, setActionBusy] = useState(false);
 
   const loadOrders = useCallback(async () => {
@@ -85,9 +85,25 @@ export default function Verification({ currentUser, onEditOrder }) {
     setSearch("");
   }
 
-  function requestAction(orderId, newStatus) {
+  async function requestAction(orderId, newStatus) {
     setOpenMenuId(null);
     setPendingAction({ orderId, newStatus });
+    setStockWarnings([]);
+
+    if (newStatus === "Confirmed") {
+      const [{ data: items }, { data: fgRows }] = await Promise.all([
+        supabase.from("order_items").select("*").eq("order_id", orderId),
+        supabase.from("fg_stock").select("*"),
+      ]);
+      const warnings = (items || []).map((it) => {
+        const stockRow = (fgRows || []).find(
+          (f) => f.item_name === it.item_name && (f.brand || "") === (it.brand || "") && f.size === it.size && f.thickness === it.thickness
+        );
+        const available = stockRow ? Number(stockRow.qty_available) : 0;
+        return { ...it, available };
+      }).filter((it) => Number(it.qty) > it.available);
+      setStockWarnings(warnings);
+    }
   }
 
   async function confirmPendingAction() {
@@ -96,70 +112,20 @@ export default function Verification({ currentUser, onEditOrder }) {
     const { orderId, newStatus } = pendingAction;
 
     try {
+      const payload = { status: newStatus };
       if (newStatus === "Confirmed") {
-        // Approve: run the automatic FG stock check before deciding the final status
-        const { data: items, error: itemsErr } = await supabase
-          .from("order_items")
-          .select("*")
-          .eq("order_id", orderId);
-        if (itemsErr) throw itemsErr;
-
-        const shortfalls = await checkFgShortfall(items || []);
-
-        if (shortfalls.length === 0) {
-          // fully covered by stock — approve straight through
-          const { error } = await supabase
-            .from("orders")
-            .update({ status: "Confirmed", approved_by: currentUser, approved_at: new Date().toISOString() })
-            .eq("order_id", orderId);
-          if (error) throw error;
-        } else {
-          // not enough stock — approve but route to Indent, and open a production job
-          // for the shortfall quantity only.
-          const { error: orderErr } = await supabase
-            .from("orders")
-            .update({ status: "Indent Raised", approved_by: currentUser, approved_at: new Date().toISOString() })
-            .eq("order_id", orderId);
-          if (orderErr) throw orderErr;
-
-          // Each item gets its OWN production job — different products (e.g.
-          // Blockboard vs Plywood) run on different lines in real factories,
-          // so they must be schedulable independently in PPC.
-          for (let i = 0; i < shortfalls.length; i++) {
-            const s = shortfalls[i];
-            const jobNumber = `JOB-${orderId.split("/").pop()}-${Date.now().toString().slice(-5)}${i}`;
-            const { data: jobRow, error: jobErr } = await supabase
-              .from("production_jobs")
-              .insert({ job_number: jobNumber, order_id: orderId, status: "Pending Material" })
-              .select()
-              .single();
-            if (jobErr) throw jobErr;
-
-            const { error: jobItemsErr } = await supabase.from("production_job_items").insert({
-              job_id: jobRow.id,
-              item_name: s.item_name,
-              brand: s.brand,
-              size: s.size,
-              thickness: s.thickness,
-              qty: s.shortQty,
-            });
-            if (jobItemsErr) throw jobItemsErr;
-          }
-        }
-      } else {
-        // Hold / Cancel — unchanged, direct status update
-        const { error } = await supabase
-          .from("orders")
-          .update({ status: newStatus })
-          .eq("order_id", orderId);
-        if (error) throw error;
+        payload.approved_by = currentUser;
+        payload.approved_at = new Date().toISOString();
       }
+      const { error } = await supabase.from("orders").update(payload).eq("order_id", orderId);
+      if (error) throw error;
       loadOrders();
     } catch (err) {
       setErrorMsg("Failed to update: " + err.message);
     } finally {
       setActionBusy(false);
       setPendingAction(null);
+      setStockWarnings([]);
     }
   }
 
@@ -401,15 +367,28 @@ export default function Verification({ currentUser, onEditOrder }) {
         open={!!pendingAction}
         title="Confirm Status Change"
         message={
-          pendingAction
-            ? pendingAction.newStatus === "Confirmed"
-              ? `Approve ${pendingAction.orderId} — stock will be checked automatically.`
-              : `Update ${pendingAction.orderId} to "${pendingAction.newStatus}"?`
-            : ""
+          pendingAction ? (
+            <>
+              <div>{`Update ${pendingAction.orderId} to "${pendingAction.newStatus}"?`}</div>
+              {stockWarnings.length > 0 && (
+                <div style={{
+                  marginTop: 12, background: "#fdeceb", color: "#c23c33", borderRadius: 10,
+                  padding: "10px 12px", fontSize: 12, fontWeight: 600, textAlign: "left",
+                }}>
+                  ⚠️ Stock is short for {stockWarnings.length} item(s):
+                  <ul style={{ margin: "6px 0 0 0", paddingLeft: 18 }}>
+                    {stockWarnings.map((w, i) => (
+                      <li key={i}>{w.item_name} ({w.thickness}, {w.size}) — need {w.qty}, only {w.available} in FG Stock</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          ) : ""
         }
         confirmLabel={actionBusy ? "Updating..." : "Confirm"}
         onConfirm={confirmPendingAction}
-        onCancel={() => setPendingAction(null)}
+        onCancel={() => { setPendingAction(null); setStockWarnings([]); }}
       />
     </div>
   );

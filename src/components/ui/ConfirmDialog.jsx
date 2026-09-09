@@ -8,7 +8,7 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = "Ye
       <div className="cd-card" onClick={(e) => e.stopPropagation()}>
         <div className="cd-icon"><HelpCircle size={24} /></div>
         <h4>{title}</h4>
-        <p>{message}</p>
+        <div className="cd-message">{message}</div>
         <div className="cd-actions">
           <button className="cd-cancel" onClick={onCancel}>Cancel</button>
           <button className="cd-confirm" onClick={onConfirm}>{confirmLabel}</button>
@@ -33,7 +33,7 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = "Ye
           background: #e8f1ff; color: #1d5fc7; display: flex; align-items: center; justify-content: center;
         }
         .cd-card h4 { margin: 0 0 6px 0; font-family: 'Space Grotesk', sans-serif; font-size: 16px; }
-        .cd-card p { margin: 0 0 18px 0; font-size: 13px; color: #8a8da0; }
+        .cd-card .cd-message { margin: 0 0 18px 0; font-size: 13px; color: #8a8da0; }
         .cd-actions { display: flex; gap: 8px; }
         .cd-cancel, .cd-confirm { flex: 1; border: none; border-radius: 10px; padding: 10px; font-weight: 700; font-size: 13px; cursor: pointer; }
         .cd-cancel { background: #f1f2f6; color: #4a4d5c; }

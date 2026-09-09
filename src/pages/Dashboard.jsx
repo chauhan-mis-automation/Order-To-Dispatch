@@ -152,6 +152,14 @@ export default function Dashboard() {
         .db-top-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
         @media (max-width: 980px) { .db-top-grid { grid-template-columns: 1fr; } }
         .db-empty-list { text-align: center; color: #b7b9c6; font-size: 12.5px; padding: 16px 0; }
+
+        .db-prod-card { background: linear-gradient(135deg, #14161f, #1e2130); color: #fff; border-radius: 16px; padding: 16px 20px; margin-bottom: 18px; }
+        .db-prod-title { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #ffcd80; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+        .db-prod-total { font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 8px; }
+        .db-prod-breakdown { display: flex; gap: 8px; flex-wrap: wrap; }
+        .db-prod-chip { background: rgba(255,255,255,0.08); border-radius: 9px; padding: 5px 11px; font-size: 11.5px; }
+        .db-prod-chip b { color: #ffcd80; }
+        .db-prod-empty { font-size: 12px; color: #a7abc0; }
       `}</style>
 
       {errorMsg && <div className="db-error">{errorMsg}</div>}

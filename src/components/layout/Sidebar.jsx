@@ -14,13 +14,9 @@ import {
   Boxes,
   LogOut,
   Users,
-  FlaskConical,
-  Package,
-  ClipboardList,
   ShoppingCart,
-  Tag,
-  ListChecks,
-  ClipboardCheck,
+  UploadCloud,
+  Layers,
   Factory,
 } from "lucide-react";
 
@@ -34,10 +30,6 @@ import {
 
 const PIPELINE = [
   { id: "verification", label: "Verification", icon: CheckCircle2, count: 12 },
-  { id: "indent", label: "Indent", icon: FlaskConical, count: 0 },
-  { id: "ppc", label: "PPC (Planning)", icon: ListChecks, count: 0 },
-  { id: "production_floor", label: "Production", icon: Factory, count: 0 },
-  { id: "qc", label: "QC", icon: ClipboardCheck, count: 0 },
   { id: "picking", label: "Picking", icon: ShoppingBasket, count: 7 },
   { id: "planning", label: "Planning", icon: CalendarClock, count: 4 },
   { id: "packing", label: "Packing", icon: PackageCheck, count: 3 },
@@ -74,12 +66,11 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
     ...STANDALONE,
     ...PIPELINE,
     ...TAIL,
+    { id: "create_order", label: "New Order" },
+    { id: "bulk_order_upload", label: "Bulk Order Upload" },
     { id: "users", label: "User Management" },
-    { id: "raw_materials", label: "Raw Materials" },
-    { id: "fg_items", label: "FG Items" },
-    { id: "bom_setup", label: "BOM Setup" },
-    { id: "fg_stock", label: "FG Stock" },
-    { id: "rm_stock", label: "RM Stock" },
+    { id: "production", label: "Production" },
+    { id: "ims", label: "Inventory (IMS)" },
     { id: "purchase_orders", label: "Purchase Orders" },
   ];
 
@@ -267,6 +258,23 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
         .o2d-cta:active { transform: translateY(0px) scale(0.98); }
         .o2d-sidebar.collapsed .o2d-cta span { display: none; }
         .o2d-sidebar.collapsed .o2d-cta { padding: 12px; }
+
+        .o2d-bulk-btn {
+          width: 100%; margin-top: 8px;
+          display: flex; align-items: center; justify-content: center; gap: 7px;
+          background: transparent; color: #c7cadb;
+          border: 1px dashed rgba(255,255,255,0.18);
+          border-radius: 10px;
+          padding: 9px 12px;
+          font-weight: 600;
+          font-size: 12px;
+          font-family: 'Inter', sans-serif;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .o2d-bulk-btn:hover { background: rgba(245,166,35,0.08); border-color: rgba(245,166,35,0.4); color: #ffcd80; }
+        .o2d-sidebar.collapsed .o2d-bulk-btn span { display: none; }
+        .o2d-sidebar.collapsed .o2d-bulk-btn { padding: 9px; }
 
         /* ---------- Nav sections ---------- */
         .o2d-nav {
@@ -582,6 +590,10 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
             <Plus size={16} strokeWidth={2.6} />
             <span>New Order</span>
           </button>
+          <button className="o2d-bulk-btn" onClick={() => setActive("bulk_order_upload")}>
+            <UploadCloud size={14} strokeWidth={2.4} />
+            <span>Bulk Upload</span>
+          </button>
         </div>
 
         <nav className="o2d-nav">
@@ -609,6 +621,14 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
             ))}
           </div>
 
+          <div className="o2d-section-label">Factory Floor</div>
+          <NavItem
+            item={{ id: "production", label: "Production", icon: Factory }}
+            active={active === "production"}
+            onClick={() => setActive("production")}
+            delay={mounted ? (PIPELINE.length + 1) * 45 : 0}
+          />
+
           <div className="o2d-section-label">Records</div>
           {TAIL.map((item, i) => (
             <NavItem
@@ -630,34 +650,10 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
                 delay={mounted ? (PIPELINE.length + TAIL.length + 3) * 40 : 0}
               />
               <NavItem
-                item={{ id: "raw_materials", label: "Raw Materials", icon: Package }}
-                active={active === "raw_materials"}
-                onClick={() => setActive("raw_materials")}
+                item={{ id: "ims", label: "Inventory (IMS)", icon: Layers }}
+                active={active === "ims"}
+                onClick={() => setActive("ims")}
                 delay={mounted ? (PIPELINE.length + TAIL.length + 4) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "fg_items", label: "FG Items", icon: Tag }}
-                active={active === "fg_items"}
-                onClick={() => setActive("fg_items")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 4.5) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "bom_setup", label: "BOM Setup", icon: ClipboardList }}
-                active={active === "bom_setup"}
-                onClick={() => setActive("bom_setup")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 5) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "fg_stock", label: "FG Stock", icon: Boxes }}
-                active={active === "fg_stock"}
-                onClick={() => setActive("fg_stock")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 6) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "rm_stock", label: "RM Stock", icon: FlaskConical }}
-                active={active === "rm_stock"}
-                onClick={() => setActive("rm_stock")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 7) * 40 : 0}
               />
               <NavItem
                 item={{ id: "purchase_orders", label: "Purchase Orders", icon: ShoppingCart }}
