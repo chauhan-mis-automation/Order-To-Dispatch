@@ -36,7 +36,18 @@ function excelDateToISO(value) {
     const d = XLSX.SSF.parse_date_code(value);
     if (d) return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
   }
-  const parsed = new Date(value);
+  const str = String(value).trim();
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymd) {
+    const [, y, m, d] = ymd;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().split("T")[0];
   return new Date().toISOString().split("T")[0];
 }

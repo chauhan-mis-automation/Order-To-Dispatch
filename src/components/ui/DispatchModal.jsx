@@ -300,6 +300,13 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
                       );
                       const available = stockRow ? Number(stockRow.qty_available) : 0;
                       const over = (Number(row.qty) || 0) > available;
+                      if (!stockRow) {
+                        return (
+                          <div className="dm-stock-hint dm-stock-over">
+                            ⚠️ No stock record for "{row.brand || "no brand"}" — will NOT deduct
+                          </div>
+                        );
+                      }
                       return (
                         <div className={`dm-stock-hint ${over ? "dm-stock-over" : ""}`}>
                           Stock: {available} {over ? "⚠️ exceeds stock" : ""}

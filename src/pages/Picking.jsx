@@ -177,7 +177,7 @@ export default function Picking({ currentUser }) {
         .pk-table-scroll { overflow-x: auto; max-height: 78vh; min-height: 340px; overflow-y: auto; }
         table.pk-table { width: 100%; border-collapse: collapse; min-width: 1200px; font-size: 13px; }
         .pk-table thead th {
-          position: sticky; top: 0; background: #14161f; color: #fff; text-align: left;
+          position: sticky; top: 0; z-index: 5; background: #14161f; color: #fff; text-align: left;
           padding: 15px 18px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
         }
         .pk-table tbody td { padding: 16px 18px; border-bottom: 1px solid #f0f1f6; white-space: nowrap; font-size: 13.5px; }
@@ -200,7 +200,7 @@ export default function Picking({ currentUser }) {
         }
         .pk-menu-panel {
           position: absolute; top: calc(100% + 6px); right: 0; background: #fff; border: 1px solid #e6e8f0;
-          border-radius: 12px; box-shadow: 0 14px 30px rgba(20,22,35,0.14); z-index: 30; min-width: 200px; padding: 6px;
+          border-radius: 12px; box-shadow: 0 14px 30px rgba(20,22,35,0.14); z-index: 100; min-width: 200px; padding: 6px;
         }
         .pk-menu-item {
           display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; font-size: 13px;

@@ -18,6 +18,7 @@ import {
   UploadCloud,
   Layers,
   Factory,
+  BarChart3 as BarChartIcon,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -40,9 +41,12 @@ const STANDALONE = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
 ];
 
-const TAIL = [{ id: "history", label: "History", icon: History }];
+const TAIL = [
+  { id: "history", label: "History", icon: History },
+  { id: "reports", label: "Reports", icon: BarChartIcon },
+];
 
-export default function Sidebar({ activeView, onNavigate, children, currentUser, onLogout, counts = {}, isAdmin = false }) {
+export default function Sidebar({ activeView, onNavigate, children, currentUser, onLogout, counts = {}, isAdmin = false, canAccess = () => true }) {
   const isControlled = activeView !== undefined && typeof onNavigate === "function";
   const [internalActive, setInternalActive] = useState("dashboard");
   const active = isControlled ? activeView : internalActive;
@@ -585,19 +589,21 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
           </button>
         </div>
 
-        <div className="o2d-cta-wrap">
-          <button className="o2d-cta" onClick={() => setActive("create_order")}>
-            <Plus size={16} strokeWidth={2.6} />
-            <span>New Order</span>
-          </button>
-          <button className="o2d-bulk-btn" onClick={() => setActive("bulk_order_upload")}>
-            <UploadCloud size={14} strokeWidth={2.4} />
-            <span>Bulk Upload</span>
-          </button>
-        </div>
+        {canAccess("create_order") && (
+          <div className="o2d-cta-wrap">
+            <button className="o2d-cta" onClick={() => setActive("create_order")}>
+              <Plus size={16} strokeWidth={2.6} />
+              <span>New Order</span>
+            </button>
+            <button className="o2d-bulk-btn" onClick={() => setActive("bulk_order_upload")}>
+              <UploadCloud size={14} strokeWidth={2.4} />
+              <span>Bulk Upload</span>
+            </button>
+          </div>
+        )}
 
         <nav className="o2d-nav">
-          {STANDALONE.map((item, i) => (
+          {STANDALONE.filter((item) => canAccess(item.id)).map((item, i) => (
             <NavItem
               key={item.id}
               item={item}
@@ -607,60 +613,78 @@ export default function Sidebar({ activeView, onNavigate, children, currentUser,
             />
           ))}
 
-          <div className="o2d-section-label">Order Pipeline</div>
-          <div className="o2d-pipeline">
-            <div className="o2d-pipeline-rail" />
-            {PIPELINE.map((item, i) => (
-              <StageItem
-                key={item.id}
-                item={counts[item.id] !== undefined ? { ...item, count: counts[item.id] } : item}
-                active={active === item.id}
-                onClick={() => setActive(item.id)}
-                delay={mounted ? (i + 1) * 45 : 0}
+          {PIPELINE.some((item) => canAccess(item.id)) && (
+            <>
+              <div className="o2d-section-label">Order Pipeline</div>
+              <div className="o2d-pipeline">
+                <div className="o2d-pipeline-rail" />
+                {PIPELINE.filter((item) => canAccess(item.id)).map((item, i) => (
+                  <StageItem
+                    key={item.id}
+                    item={counts[item.id] !== undefined ? { ...item, count: counts[item.id] } : item}
+                    active={active === item.id}
+                    onClick={() => setActive(item.id)}
+                    delay={mounted ? (i + 1) * 45 : 0}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {canAccess("production") && (
+            <>
+              <div className="o2d-section-label">Factory Floor</div>
+              <NavItem
+                item={{ id: "production", label: "Production", icon: Factory }}
+                active={active === "production"}
+                onClick={() => setActive("production")}
+                delay={mounted ? (PIPELINE.length + 1) * 45 : 0}
               />
-            ))}
-          </div>
+            </>
+          )}
 
-          <div className="o2d-section-label">Factory Floor</div>
-          <NavItem
-            item={{ id: "production", label: "Production", icon: Factory }}
-            active={active === "production"}
-            onClick={() => setActive("production")}
-            delay={mounted ? (PIPELINE.length + 1) * 45 : 0}
-          />
+          {TAIL.some((item) => canAccess(item.id)) && (
+            <>
+              <div className="o2d-section-label">Records</div>
+              {TAIL.filter((item) => canAccess(item.id)).map((item, i) => (
+                <NavItem
+                  key={item.id}
+                  item={item}
+                  active={active === item.id}
+                  onClick={() => setActive(item.id)}
+                  delay={mounted ? (PIPELINE.length + i + 2) * 40 : 0}
+                />
+              ))}
+            </>
+          )}
 
-          <div className="o2d-section-label">Records</div>
-          {TAIL.map((item, i) => (
-            <NavItem
-              key={item.id}
-              item={item}
-              active={active === item.id}
-              onClick={() => setActive(item.id)}
-              delay={mounted ? (PIPELINE.length + i + 2) * 40 : 0}
-            />
-          ))}
-
-          {isAdmin && (
+          {(isAdmin || canAccess("ims") || canAccess("purchase_orders")) && (
             <>
               <div className="o2d-section-label">Admin</div>
-              <NavItem
-                item={{ id: "users", label: "User Management", icon: Users }}
-                active={active === "users"}
-                onClick={() => setActive("users")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 3) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "ims", label: "Inventory (IMS)", icon: Layers }}
-                active={active === "ims"}
-                onClick={() => setActive("ims")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 4) * 40 : 0}
-              />
-              <NavItem
-                item={{ id: "purchase_orders", label: "Purchase Orders", icon: ShoppingCart }}
-                active={active === "purchase_orders"}
-                onClick={() => setActive("purchase_orders")}
-                delay={mounted ? (PIPELINE.length + TAIL.length + 8) * 40 : 0}
-              />
+              {isAdmin && (
+                <NavItem
+                  item={{ id: "users", label: "User Management", icon: Users }}
+                  active={active === "users"}
+                  onClick={() => setActive("users")}
+                  delay={mounted ? (PIPELINE.length + TAIL.length + 3) * 40 : 0}
+                />
+              )}
+              {canAccess("ims") && (
+                <NavItem
+                  item={{ id: "ims", label: "Inventory (IMS)", icon: Layers }}
+                  active={active === "ims"}
+                  onClick={() => setActive("ims")}
+                  delay={mounted ? (PIPELINE.length + TAIL.length + 4) * 40 : 0}
+                />
+              )}
+              {canAccess("purchase_orders") && (
+                <NavItem
+                  item={{ id: "purchase_orders", label: "Purchase Orders", icon: ShoppingCart }}
+                  active={active === "purchase_orders"}
+                  onClick={() => setActive("purchase_orders")}
+                  delay={mounted ? (PIPELINE.length + TAIL.length + 8) * 40 : 0}
+                />
+              )}
             </>
           )}
         </nav>

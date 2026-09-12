@@ -12,9 +12,29 @@ import History from "./pages/History";
 import Dashboard from "./pages/Dashboard";
 import Users from "./pages/Users";
 import IMS from "./pages/IMS";
+import Reports from "./pages/Reports";
 import Production from "./pages/Production";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import { supabase } from "./lib/supabaseClient";
+
+// Every navigable view maps to the role required to see it — Admin always
+// bypasses this and sees everything, regardless of their other roles.
+export const VIEW_ROLE = {
+  dashboard: "Dashboard",
+  create_order: "Create Order",
+  bulk_order_upload: "Create Order",
+  verification: "Verification",
+  picking: "Picking",
+  planning: "Planning",
+  packing: "Packing",
+  dispatch: "Dispatch",
+  production: "Production",
+  history: "History",
+  reports: "Reports",
+  ims: "Inventory",
+  purchase_orders: "Purchase Orders",
+  // "users" is intentionally not listed — Admin-only, no role can unlock it.
+};
 
 function ComingSoon({ label }) {
   return (
@@ -36,10 +56,10 @@ function RestrictedView() {
       style={{
         background: "#fff", border: "1px solid #fdeceb", borderRadius: 16, padding: 22,
         minHeight: 300, display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#c23c33", fontSize: "13.5px", fontWeight: 600,
+        color: "#c23c33", fontSize: "13.5px", fontWeight: 600, textAlign: "center",
       }}
     >
-      This section is restricted to Admin accounts only.
+      You don't have access to this section. Ask an Admin to grant you the right role in User Management.
     </div>
   );
 }
@@ -52,6 +72,19 @@ function App() {
   const [editOrderId, setEditOrderId] = useState(null);
 
   const isAdmin = currentUserRoles.includes("Admin");
+
+  // Admin always has access to everything; everyone else needs the specific
+  // role mapped to that view. Views not in VIEW_ROLE (e.g. "users") are
+  // Admin-only with no override.
+  const canAccess = useCallback(
+    (view) => {
+      if (isAdmin) return true;
+      const requiredRole = VIEW_ROLE[view];
+      if (!requiredRole) return false;
+      return currentUserRoles.includes(requiredRole);
+    },
+    [isAdmin, currentUserRoles]
+  );
 
   useEffect(() => {
     if (!currentUser) return;
@@ -102,7 +135,13 @@ function App() {
   function handleLoginSuccess(user) {
     setCurrentUser(user.name);
     setCurrentUserRoles(user.roles || []);
-    setActiveView("dashboard");
+    // Land on the first view this user actually has access to, not a
+    // hardcoded dashboard they might not be allowed to see.
+    const admin = (user.roles || []).includes("Admin");
+    const firstAllowed = admin || (user.roles || []).includes("Dashboard")
+      ? "dashboard"
+      : Object.keys(VIEW_ROLE).find((v) => (user.roles || []).includes(VIEW_ROLE[v])) || "dashboard";
+    setActiveView(firstAllowed);
   }
 
   function handleLogout() {
@@ -117,7 +156,9 @@ function App() {
   }
 
   let pageContent;
-  if (activeView === "create_order") {
+  if (!canAccess(activeView) && activeView !== "users") {
+    pageContent = <RestrictedView />;
+  } else if (activeView === "create_order") {
     pageContent = <CreateOrder currentUser={currentUser} editOrderId={editOrderId} onExitEdit={exitEditOrder} />;
   } else if (activeView === "bulk_order_upload") {
     pageContent = <BulkOrderUpload currentUser={currentUser} />;
@@ -135,14 +176,16 @@ function App() {
     pageContent = <Dispatch currentUser={currentUser} requireLogin={requireLogin} />;
   } else if (activeView === "history") {
     pageContent = <History />;
+  } else if (activeView === "reports") {
+    pageContent = <Reports />;
   } else if (activeView === "users") {
     pageContent = isAdmin ? <Users /> : <RestrictedView />;
   } else if (activeView === "production") {
     pageContent = <Production currentUser={currentUser} />;
   } else if (activeView === "ims") {
-    pageContent = isAdmin ? <IMS /> : <RestrictedView />;
+    pageContent = <IMS />;
   } else if (activeView === "purchase_orders") {
-    pageContent = isAdmin ? <PurchaseOrders currentUser={currentUser} /> : <RestrictedView />;
+    pageContent = <PurchaseOrders currentUser={currentUser} />;
   } else {
     pageContent = <ComingSoon label={activeView} />;
   }
@@ -155,6 +198,7 @@ function App() {
       onLogout={handleLogout}
       counts={navCounts}
       isAdmin={isAdmin}
+      canAccess={canAccess}
     >
       {pageContent}
     </Sidebar>

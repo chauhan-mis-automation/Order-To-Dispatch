@@ -4,6 +4,7 @@ import { supabase } from "../../lib/supabaseClient";
 
 const ROLE_OPTIONS = [
   "Admin", "Dashboard", "Verification", "Picking", "Planning", "Packing", "Dispatch", "History", "Create Order",
+  "Production", "Inventory", "Purchase Orders", "Reports",
 ];
 
 export default function UserFormModal({ open, user, onClose, onSaved }) {

@@ -132,18 +132,20 @@ export default function Production({ currentUser }) {
 
 /* ============================== DASHBOARD ============================== */
 function DashboardTab({ joinedRows, targets }) {
-  const [filterDate, setFilterDate] = useState(todayStr());
+  const [fromDate, setFromDate] = useState(todayStr());
+  const [toDate, setToDate] = useState(todayStr());
   const [filterProduct, setFilterProduct] = useState("");
 
   const productList = useMemo(() => [...new Set(joinedRows.map((r) => r.product))], [joinedRows]);
 
   const filtered = useMemo(() => {
     return joinedRows.filter((r) => {
-      if (filterDate && r.entry_date !== filterDate) return false;
+      if (fromDate && r.entry_date < fromDate) return false;
+      if (toDate && r.entry_date > toDate) return false;
       if (filterProduct && r.product !== filterProduct) return false;
       return true;
     });
-  }, [joinedRows, filterDate, filterProduct]);
+  }, [joinedRows, fromDate, toDate, filterProduct]);
 
   const totals = useMemo(() => {
     const target = filtered.reduce((s, r) => s + Number(r.target), 0);
@@ -215,7 +217,10 @@ function DashboardTab({ joinedRows, targets }) {
   return (
     <div>
       <style>{`
-        .pd-filters { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+        .pd-filters { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; align-items: end; }
+        .pd-filter-item label.pd-filter-label { display: block; font-size: 10px; font-weight: 700; color: #9295a8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+        .pd-quick-btn { border: 1px solid #e1e3ec; background: #fff; color: #5b5f72; border-radius: 10px; padding: 9px 13px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+        .pd-quick-btn:hover { background: #f6f7fb; border-color: #f5a623; color: #b5620f; }
         .pd-filters input, .pd-filters select { border: 1px solid #e1e3ec; border-radius: 10px; padding: 9px 12px; font-size: 13px; background: #fff; }
 
         .pd-top-grid { display: grid; grid-template-columns: 220px 1fr; gap: 16px; margin-bottom: 20px; }
@@ -264,7 +269,17 @@ function DashboardTab({ joinedRows, targets }) {
       `}</style>
 
       <div className="pd-filters">
-        <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+        <div className="pd-filter-item">
+          <label className="pd-filter-label">From</label>
+          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+        </div>
+        <div className="pd-filter-item">
+          <label className="pd-filter-label">To</label>
+          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        </div>
+        <button className="pd-quick-btn" onClick={() => { setFromDate(todayStr()); setToDate(todayStr()); }}>Today</button>
+        <button className="pd-quick-btn" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 6); setFromDate(d.toISOString().split("T")[0]); setToDate(todayStr()); }}>Last 7 Days</button>
+        <button className="pd-quick-btn" onClick={() => { setFromDate(monthStr() + "-01"); setToDate(todayStr()); }}>This Month</button>
         <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
           <option value="">All Products</option>
           {productList.map((p) => <option key={p} value={p}>{p}</option>)}

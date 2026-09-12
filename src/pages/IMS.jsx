@@ -118,6 +118,14 @@ export default function IMS() {
       .reduce((sum, d) => sum + (Number(d.dispatched_qty) || 0), 0);
   }
 
+  // How much of this raw material has been ISSUED (consumed) so far in the current calendar month
+  function monthlyConsumption(materialId) {
+    const thisMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+    return issueLog
+      .filter((i) => i.material_id === materialId && i.issue_date && i.issue_date.startsWith(thisMonth))
+      .reduce((sum, i) => sum + (Number(i.qty_issued) || 0), 0);
+  }
+
   // ---- unify RM + FG rows into one shape for a single table ----
   const unifiedRows = useMemo(() => {
     const rm = rmRows.map((r) => ({
@@ -134,6 +142,7 @@ export default function IMS() {
       remarks: r.remarks || "",
       activityLabel: "Received (30d)",
       activityValue: receivedLast30d(r.material_id),
+      monthlyConsumption: monthlyConsumption(r.material_id),
     }));
     const fg = fgRows.map((r) => ({
       key: `fg_${r.id}`, kind: "FG", rowId: r.id,
@@ -149,9 +158,10 @@ export default function IMS() {
       remarks: r.remarks || "",
       activityLabel: "Dispatched (30d)",
       activityValue: dispatchedLast30d(r),
+      monthlyConsumption: null,
     }));
     return [...rm, ...fg];
-  }, [rmRows, fgRows, poItems, dispatchLogs]);
+  }, [rmRows, fgRows, poItems, dispatchLogs, issueLog]);
 
   const filteredRows = useMemo(() => {
     return unifiedRows.filter((row) => {
@@ -504,7 +514,7 @@ export default function IMS() {
             <thead>
               <tr>
                 <th>Type</th><th>Code</th><th>Name</th><th>Category / Specs</th><th>UOM</th>
-                <th>Closing Stock</th><th>30d Activity</th><th>Min</th><th>Max</th><th>Status</th>
+                <th>Closing Stock</th><th>30d Activity</th><th>Monthly Consumption</th><th>Min</th><th>Max</th><th>Status</th>
                 <th>Location</th><th>Remarks</th><th></th>
               </tr>
             </thead>
@@ -529,6 +539,13 @@ export default function IMS() {
                       )}
                     </td>
                     <td><span className="ims-activity">{row.activityValue}</span> <span style={{ fontSize: 10, color: "#9295a8" }}>{row.activityLabel.includes("Received") ? "recv" : "disp"}</span></td>
+                    <td>
+                      {row.monthlyConsumption === null ? (
+                        <span style={{ color: "#c3c5d1" }}>—</span>
+                      ) : (
+                        <span className="ims-activity" style={{ color: "#c23c33" }}>{row.monthlyConsumption}</span>
+                      )}
+                    </td>
                     <td>
                       {isEditing ? (
                         <input type="number" className="ims-edit-input" value={editForm.min} onChange={(e) => setEditForm((f) => ({ ...f, min: e.target.value }))} />

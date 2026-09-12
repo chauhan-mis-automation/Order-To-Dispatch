@@ -7,6 +7,30 @@ function poNumber() {
   return `PO-${Date.now().toString().slice(-8)}`;
 }
 
+// Handles Excel serial dates AND text dates in DD-MM-YYYY / DD/MM/YYYY / YYYY-MM-DD —
+// converts to the ISO yyyy-mm-dd format Postgres expects. Returns null if empty/unparseable.
+function parseDateValue(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    const d = XLSX.SSF.parse_date_code(value);
+    if (d) return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+  }
+  const str = String(value).trim();
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymd) {
+    const [, y, m, d] = ymd;
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().split("T")[0];
+  return null;
+}
+
 const REQUIRED_COLS = ["PO Ref", "Vendor Name", "Material Name", "Qty"];
 
 export default function BulkPurchaseUpload({ currentUser, materials, onClose, onImported }) {
@@ -57,7 +81,7 @@ export default function BulkPurchaseUpload({ currentUser, materials, onClose, on
                   vendorName: String(row["Vendor Name"] ?? "").trim(),
                   vendorAddress: String(row["Vendor Address"] ?? "").trim(),
                   deliveryLocation: String(row["Deliver To"] ?? "").trim(),
-                  expectedDate: row["Expected Date"] ? String(row["Expected Date"]).trim() : "",
+                  expectedDate: parseDateValue(row["Expected Date"]),
                   paymentTerms: String(row["Payment Terms"] ?? "").trim(),
                   remarks: String(row["Remarks"] ?? "").trim(),
                 },
