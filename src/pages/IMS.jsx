@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Plus, Loader2, Boxes, Pencil, Trash2, Check, X, Search, AlertTriangle, Layers, PackageMinus,
+  Plus, Loader2, Boxes, Pencil, Trash2, Check, X, Search, AlertTriangle, Layers, PackageMinus, UploadCloud,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
+import BulkIssueUpload from "../components/ui/BulkIssueUpload";
 
 const RM_CATEGORIES = ["Raw Material", "Consumable", "Packing Material", "Utility"];
 const ALL_CATEGORIES = [...RM_CATEGORIES, "Finished Goods"];
@@ -78,6 +79,7 @@ export default function IMS() {
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [issueLog, setIssueLog] = useState([]);
+  const [showBulkIssue, setShowBulkIssue] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -354,6 +356,7 @@ export default function IMS() {
         .ims-cancel-btn { border: 1px solid #e1e3ec; background: #fff; color: #5b5f72; padding: 10px 20px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; }
 
         .ims-issue-btn { border: none; background: linear-gradient(135deg, #c23c33, #a12e26); color: #fff; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+        .ims-bulk-issue-btn { border: 1px solid #f3c6c3; background: #fdeceb; color: #c23c33; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
         .ims-issue-card { background: #fff; border: 1.5px solid #f3c6c3; border-radius: 16px; padding: 20px; margin-bottom: 16px; }
         .ims-issue-hint { background: #fdeceb; color: #c23c33; border-radius: 9px; padding: 9px 12px; font-size: 12px; font-weight: 600; margin-top: 4px; }
         .ims-issue-avail { font-size: 12px; color: #5b5f72; margin-top: 4px; }
@@ -411,6 +414,9 @@ export default function IMS() {
         <div className="ims-cat-select">
           <ComboBox value={categoryFilter} onChange={setCategoryFilter} options={ALL_CATEGORIES} placeholder="All Categories" />
         </div>
+        <button className="ims-bulk-issue-btn" onClick={() => setShowBulkIssue(true)}>
+          <UploadCloud size={15} /> Bulk Issue Upload
+        </button>
         <button className="ims-issue-btn" onClick={() => { setShowIssueForm((s) => !s); setShowAddForm(false); }}>
           <PackageMinus size={15} /> Issue Material
         </button>
@@ -621,6 +627,14 @@ export default function IMS() {
           </table>
         )}
       </div>
+
+      {showBulkIssue && (
+        <BulkIssueUpload
+          rmRows={rmRows}
+          onClose={() => setShowBulkIssue(false)}
+          onImported={load}
+        />
+      )}
     </div>
   );
 }
