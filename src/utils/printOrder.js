@@ -46,6 +46,9 @@ export async function printOrder(orderId) {
   const destHtml = order.destination
     ? `<div><strong>Destination:</strong> <span>${order.destination}</span></div>`
     : "";
+  const addressHtml = order.address
+    ? `<div><strong>Address:</strong> <span>${order.address}</span></div>`
+    : "";
 
   const html = `<!DOCTYPE html><html><head><title>Print Order ${order.order_id}</title><style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 20px; color: #333;}
@@ -67,6 +70,7 @@ export async function printOrder(orderId) {
         <div><strong>Order Date:</strong> <span>${fmt(order.order_date)}</span></div>
         <div><strong>Brand:</strong> <span>${order.brand || ""}</span></div>
         ${destHtml}
+        ${addressHtml}
       </div>
       ${globalRem}
       <h3>Item Details</h3>

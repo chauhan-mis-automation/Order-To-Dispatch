@@ -94,7 +94,7 @@ function App() {
         supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Confirmed"),
         supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Confirmed").not("plan_dispatch_date", "is", null),
         supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Picked"),
-        supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Ready to Ship"),
+        supabase.from("orders").select("*", { count: "exact", head: true }).in("status", ["Ready to Ship", "Partially Dispatched"]),
       ]);
       setNavCounts((prev) => ({
         ...prev,

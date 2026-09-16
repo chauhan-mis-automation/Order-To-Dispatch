@@ -1,13 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Eye, Pencil, RotateCcw, FileSpreadsheet, Loader2, Search, Truck } from "lucide-react";
+import { Eye, Pencil, RotateCcw, FileSpreadsheet, Loader2, Search, Truck, ClipboardList, Lock } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
 import DispatchModal from "../components/ui/DispatchModal";
+import DispatchLogModal from "../components/ui/DispatchLogModal";
+import CloseOrderModal from "../components/ui/CloseOrderModal";
 
-const STATUSES = ["Ready to Ship"];
-const STATUS_STYLES = { "Ready to Ship": { bg: "#f3e8ff", color: "#8b3fd6" } };
+const STATUSES = ["Ready to Ship", "Partially Dispatched"];
+const STATUS_STYLES = {
+  "Ready to Ship": { bg: "#f3e8ff", color: "#8b3fd6" },
+  "Partially Dispatched": { bg: "#fff4de", color: "#b5620f" },
+};
 
 function formatDate(d) {
   if (!d) return "-";
@@ -30,6 +35,8 @@ export default function Dispatch({ currentUser, requireLogin }) {
 
   const [viewOrderId, setViewOrderId] = useState(null);
   const [dispatchOrder, setDispatchOrder] = useState(null); // full order object
+  const [varianceOrderId, setVarianceOrderId] = useState(null);
+  const [closeOrder, setCloseOrder] = useState(null); // full order object
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -117,6 +124,11 @@ export default function Dispatch({ currentUser, requireLogin }) {
           border: none; background: #14161f; color: #fff; border-radius: 9px; padding: 9px 16px;
           font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 7px;
         }
+        .ds-close-btn {
+          border: 1px solid #f3c6c3; background: #fdeceb; color: #c23c33; border-radius: 9px; padding: 9px 13px;
+          font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+        }
+        .ds-close-btn:hover { background: #fbd8d6; }
 
         .ds-loading, .ds-nodata { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; color: #9295a8; gap: 10px; }
         .ds-spin { animation: ds-spin-anim 0.9s linear infinite; }
@@ -197,8 +209,18 @@ export default function Dispatch({ currentUser, requireLogin }) {
                           <button className="ds-iconbtn" title="View Items" onClick={() => setViewOrderId(o.order_id)}>
                             <Eye size={14} />
                           </button>
+                          {o.status === "Partially Dispatched" && (
+                            <button className="ds-iconbtn" title="Dispatch Log" onClick={() => setVarianceOrderId(o.order_id)}>
+                              <ClipboardList size={14} />
+                            </button>
+                          )}
+                          {o.status === "Partially Dispatched" && (
+                            <button className="ds-close-btn" title="Close order manually — cancels the pending qty" onClick={() => setCloseOrder(o)}>
+                              <Lock size={13} /> Close
+                            </button>
+                          )}
                           <button className="ds-dispatch-btn" onClick={() => setDispatchOrder(o)}>
-                            <Pencil size={13} /> Edit & Dispatch
+                            <Pencil size={13} /> {o.status === "Partially Dispatched" ? "Dispatch Remaining" : "Dispatch"}
                           </button>
                         </div>
                       </td>
@@ -212,6 +234,16 @@ export default function Dispatch({ currentUser, requireLogin }) {
       </div>
 
       <OrderItemsModal orderId={viewOrderId} onClose={() => setViewOrderId(null)} />
+      <DispatchLogModal orderId={varianceOrderId} onClose={() => setVarianceOrderId(null)} />
+
+      {closeOrder && (
+        <CloseOrderModal
+          order={closeOrder}
+          currentUser={currentUser}
+          onClose={() => setCloseOrder(null)}
+          onClosed={() => { setCloseOrder(null); loadOrders(); }}
+        />
+      )}
 
       {dispatchOrder && (
         <DispatchModal

@@ -62,6 +62,14 @@ export default function IMS() {
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [viewTab, setViewTab] = useState("inventory"); // "inventory" | "log"
+
+  const [sections, setSections] = useState([]); // section_master names
+  const [uomList, setUomList] = useState([]); // uom_master names
+  const [newSectionInput, setNewSectionInput] = useState("");
+  const [addingSection, setAddingSection] = useState(false);
+  const [newUomInput, setNewUomInput] = useState("");
+  const [addingUom, setAddingUom] = useState(false);
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -74,6 +82,8 @@ export default function IMS() {
   const [issueCategory, setIssueCategory] = useState("Raw Material");
   const [issueMaterialName, setIssueMaterialName] = useState("");
   const [issueQty, setIssueQty] = useState("");
+  const [issueDate, setIssueDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [issueSection, setIssueSection] = useState("");
   const [issuedTo, setIssuedTo] = useState("");
   const [issueRemarks, setIssueRemarks] = useState("");
   const [issuing, setIssuing] = useState(false);
@@ -81,15 +91,21 @@ export default function IMS() {
   const [issueLog, setIssueLog] = useState([]);
   const [showBulkIssue, setShowBulkIssue] = useState(false);
 
+  const [logSearch, setLogSearch] = useState("");
+  const [logFromDate, setLogFromDate] = useState("");
+  const [logToDate, setLogToDate] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
-    const [rmRes, fgRes, poItemsRes, dispatchRes, issueRes] = await Promise.all([
+    const [rmRes, fgRes, poItemsRes, dispatchRes, issueRes, sectionRes, uomRes] = await Promise.all([
       supabase.from("rm_stock").select("*, raw_materials(id, name, unit, item_code, category)").order("id"),
       supabase.from("fg_stock").select("*").order("item_name"),
       supabase.from("purchase_order_items").select("*").gt("qty_received", 0),
       supabase.from("dispatch_logs").select("*"),
       supabase.from("material_issues").select("*, raw_materials(name, item_code, category, unit)").order("issue_date", { ascending: false }).order("created_at", { ascending: false }),
+      supabase.from("section_master").select("name").order("sequence"),
+      supabase.from("uom_master").select("name").order("sequence"),
     ]);
     if (rmRes.error) setError(rmRes.error.message);
     else setRmRows(rmRes.data || []);
@@ -98,40 +114,95 @@ export default function IMS() {
     setPoItems(poItemsRes.data || []);
     setDispatchLogs(dispatchRes.data || []);
     setIssueLog(issueRes.data || []);
+    setSections((sectionRes.data || []).map((s) => s.name));
+    setUomList((uomRes.data || []).map((u) => u.name));
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  function receivedLast30d(materialId) {
-    const cutoff = Date.now() - THIRTY_DAYS_MS;
+  async function addSection() {
+    if (!newSectionInput.trim()) return;
+    setAddingSection(true);
+    try {
+      const { error: err } = await supabase.from("section_master").insert({ name: newSectionInput.trim(), sequence: sections.length + 1 });
+      if (err && err.code !== "23505") throw err;
+      setIssueSection(newSectionInput.trim());
+      setNewSectionInput("");
+      load();
+    } catch (err) {
+      setIssueError(err.message);
+    } finally {
+      setAddingSection(false);
+    }
+  }
+
+  async function addUom() {
+    if (!newUomInput.trim()) return;
+    setAddingUom(true);
+    try {
+      const { error: err } = await supabase.from("uom_master").insert({ name: newUomInput.trim(), sequence: uomList.length + 1 });
+      if (err && err.code !== "23505") throw err;
+      updateForm("unit", newUomInput.trim());
+      setNewUomInput("");
+      load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAddingUom(false);
+    }
+  }
+
+  // the Inventory table's Activity/Consumption columns now always use the default window
+  function activityWindow() {
+    return { fromMs: Date.now() - THIRTY_DAYS_MS, toMs: Infinity, isCustom: false };
+  }
+
+  function receivedInWindow(materialId) {
+    const { fromMs, toMs } = activityWindow();
     return poItems
-      .filter((it) => it.material_id === materialId && it.last_received_at && new Date(it.last_received_at).getTime() >= cutoff)
+      .filter((it) => {
+        if (it.material_id !== materialId || !it.last_received_at) return false;
+        const t = new Date(it.last_received_at).getTime();
+        return t >= fromMs && t <= toMs;
+      })
       .reduce((sum, it) => sum + (Number(it.qty_received) || 0), 0);
   }
-  function dispatchedLast30d(row) {
-    const cutoff = Date.now() - THIRTY_DAYS_MS;
+  function dispatchedInWindow(row) {
+    const { fromMs, toMs } = activityWindow();
     return dispatchLogs
       .filter((d) => {
         if (d.item_name !== row.item_name || (d.brand || "") !== (row.brand || "") || d.size !== row.size || d.thickness !== row.thickness) return false;
         if (!d.created_at) return true;
-        return new Date(d.created_at).getTime() >= cutoff;
+        const t = new Date(d.created_at).getTime();
+        return t >= fromMs && t <= toMs;
       })
       .reduce((sum, d) => sum + (Number(d.dispatched_qty) || 0), 0);
   }
 
-  // How much of this raw material has been ISSUED (consumed) so far in the current calendar month
-  function monthlyConsumption(materialId) {
-    const thisMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  // How much of this raw material has been ISSUED (consumed) — custom range if set, else the current calendar month
+  function consumptionInWindow(materialId) {
+    const { isCustom, fromMs, toMs } = activityWindow();
+    if (!isCustom) {
+      const thisMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+      return issueLog
+        .filter((i) => i.material_id === materialId && i.issue_date && i.issue_date.startsWith(thisMonth))
+        .reduce((sum, i) => sum + (Number(i.qty_issued) || 0), 0);
+    }
     return issueLog
-      .filter((i) => i.material_id === materialId && i.issue_date && i.issue_date.startsWith(thisMonth))
+      .filter((i) => {
+        if (i.material_id !== materialId || !i.issue_date) return false;
+        const t = new Date(i.issue_date).getTime();
+        return t >= fromMs && t <= toMs;
+      })
       .reduce((sum, i) => sum + (Number(i.qty_issued) || 0), 0);
   }
 
   // ---- unify RM + FG rows into one shape for a single table ----
   const unifiedRows = useMemo(() => {
+    const { isCustom } = activityWindow();
     const rm = rmRows.map((r) => ({
-      key: `rm_${r.id}`, kind: "RM", rowId: r.id,
+      key: `rm_${r.id}`, kind: "RM", rowId: r.id, materialId: r.material_id,
       code: r.raw_materials?.item_code || "-",
       name: r.raw_materials?.name || "Unknown",
       category: r.raw_materials?.category || "-",
@@ -142,9 +213,9 @@ export default function IMS() {
       max: Number(r.max_stock) || 0,
       location: r.location || "",
       remarks: r.remarks || "",
-      activityLabel: "Received (30d)",
-      activityValue: receivedLast30d(r.material_id),
-      monthlyConsumption: monthlyConsumption(r.material_id),
+      activityLabel: isCustom ? "Received (range)" : "Received (30d)",
+      activityValue: receivedInWindow(r.material_id),
+      monthlyConsumption: consumptionInWindow(r.material_id),
     }));
     const fg = fgRows.map((r) => ({
       key: `fg_${r.id}`, kind: "FG", rowId: r.id,
@@ -158,8 +229,8 @@ export default function IMS() {
       max: Number(r.max_stock) || 0,
       location: r.location || "",
       remarks: r.remarks || "",
-      activityLabel: "Dispatched (30d)",
-      activityValue: dispatchedLast30d(r),
+      activityLabel: isCustom ? "Dispatched (range)" : "Dispatched (30d)",
+      activityValue: dispatchedInWindow(r),
       monthlyConsumption: null,
     }));
     return [...rm, ...fg];
@@ -176,6 +247,19 @@ export default function IMS() {
       return true;
     });
   }, [unifiedRows, categoryFilter, search]);
+
+  const filteredLog = useMemo(() => {
+    return issueLog.filter((i) => {
+      if (logFromDate && i.issue_date && i.issue_date < logFromDate) return false;
+      if (logToDate && i.issue_date && i.issue_date > logToDate) return false;
+      if (logSearch.trim()) {
+        const q = logSearch.trim().toLowerCase();
+        const hay = `${i.raw_materials?.name || ""} ${i.section || ""} ${i.issued_to || ""} ${i.raw_materials?.item_code || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [issueLog, logFromDate, logToDate, logSearch]);
 
   // ---- Add Item (creates master + stock together, one step) ----
   useEffect(() => {
@@ -249,6 +333,7 @@ export default function IMS() {
     setEditForm({
       qty: String(row.qty), min: String(row.min), max: String(row.max),
       location: row.location, remarks: row.remarks,
+      name: row.name, category: row.category,
     });
   }
 
@@ -265,11 +350,24 @@ export default function IMS() {
         updated_at: new Date().toISOString(),
       })
       .eq("id", row.rowId);
-    if (err) setError(err.message);
-    else {
-      setEditingKey(null);
-      load();
+    if (err) {
+      setError(err.message);
+      return;
     }
+
+    if (row.kind === "RM" && row.materialId) {
+      const { error: matErr } = await supabase
+        .from("raw_materials")
+        .update({ name: editForm.name.trim(), category: editForm.category })
+        .eq("id", row.materialId);
+      if (matErr) {
+        setError(matErr.message);
+        return;
+      }
+    }
+
+    setEditingKey(null);
+    load();
   }
 
   async function removeRow(row) {
@@ -311,6 +409,8 @@ export default function IMS() {
         qty_issued: qtyNum,
         qty_before: available,
         qty_after: available - qtyNum,
+        issue_date: issueDate || new Date().toISOString().split("T")[0],
+        section: issueSection || null,
         issued_to: issuedTo.trim(),
         remarks: issueRemarks.trim(),
       });
@@ -322,7 +422,8 @@ export default function IMS() {
         .eq("id", issueMaterialRow.id);
       if (stockErr) throw stockErr;
 
-      setIssueMaterialName(""); setIssueQty(""); setIssuedTo(""); setIssueRemarks("");
+      setIssueMaterialName(""); setIssueQty(""); setIssuedTo(""); setIssueRemarks(""); setIssueSection("");
+      setIssueDate(new Date().toISOString().split("T")[0]);
       load();
     } catch (err) {
       setIssueError(err.message);
@@ -340,6 +441,14 @@ export default function IMS() {
         .ims-search { display: flex; align-items: center; gap: 8px; background: #f6f7fb; border: 1px solid #e4e6ee; border-radius: 999px; padding: 9px 14px; flex: 1; min-width: 200px; color: #9295a8; }
         .ims-search input { border: none; outline: none; font-size: 13px; width: 100%; background: transparent; }
         .ims-cat-select { min-width: 190px; }
+        .ims-tabs { display: flex; gap: 6px; background: #f6f7fb; border-radius: 12px; padding: 5px; margin-bottom: 16px; width: fit-content; }
+        .ims-tab-btn { border: none; background: transparent; color: #5b5f72; padding: 9px 18px; border-radius: 9px; font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 7px; }
+        .ims-tab-btn.active { background: #14161f; color: #fff; }
+        .ims-range-label { font-size: 12px; font-weight: 700; color: #5b5f72; white-space: nowrap; }
+        .ims-range-input { border: 1px solid #e1e3ec; border-radius: 9px; padding: 8px 11px; font-size: 12.5px; }
+        .ims-range-to { font-size: 12px; color: #9295a8; }
+        .ims-range-clear { border: 1px solid #e1e3ec; background: #fff; color: #5b5f72; border-radius: 9px; padding: 8px 12px; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .ims-range-clear:hover { background: #f6f7fb; }
         .ims-add-btn { border: none; background: linear-gradient(135deg, #f5a623, #e0951f); color: #17130a; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 
         .ims-form-card { background: #fff; border: 1.5px solid #f5a623; border-radius: 16px; padding: 20px; margin-bottom: 16px; }
@@ -361,6 +470,10 @@ export default function IMS() {
         .ims-issue-hint { background: #fdeceb; color: #c23c33; border-radius: 9px; padding: 9px 12px; font-size: 12px; font-weight: 600; margin-top: 4px; }
         .ims-issue-avail { font-size: 12px; color: #5b5f72; margin-top: 4px; }
         .ims-issue-avail b { color: #1a8a4c; }
+        .ims-quick-add { display: flex; gap: 6px; margin-top: 6px; }
+        .ims-quick-add input { flex: 1; border: 1px solid #e1e3ec; border-radius: 7px; padding: 6px 8px; font-size: 11.5px; }
+        .ims-quick-add button { border: none; background: #14161f; color: #fff; border-radius: 7px; width: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .ims-quick-add button:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .ims-log-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14.5px; margin: 22px 0 12px 0; display: flex; align-items: center; gap: 8px; }
         .ims-log-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: auto; }
@@ -407,13 +520,28 @@ export default function IMS() {
       `}</style>
 
       <div className="ims-toolbar">
-        <div className="ims-search">
-          <Search size={14} />
-          <input placeholder="Search by code, name, specs..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <div className="ims-cat-select">
-          <ComboBox value={categoryFilter} onChange={setCategoryFilter} options={ALL_CATEGORIES} placeholder="All Categories" />
-        </div>
+        {viewTab === "inventory" && (
+          <>
+            <div className="ims-search">
+              <Search size={14} />
+              <input placeholder="Search by code, name, specs..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <div className="ims-cat-select">
+              <ComboBox value={categoryFilter} onChange={setCategoryFilter} options={ALL_CATEGORIES} placeholder="All Categories" />
+            </div>
+          </>
+        )}
+        {viewTab === "log" && (
+          <>
+            <div className="ims-search">
+              <Search size={14} />
+              <input placeholder="Search by material, section, issued to..." value={logSearch} onChange={(e) => setLogSearch(e.target.value)} />
+            </div>
+            <input type="date" className="ims-range-input" value={logFromDate} onChange={(e) => setLogFromDate(e.target.value)} />
+            <span className="ims-range-to">to</span>
+            <input type="date" className="ims-range-input" value={logToDate} onChange={(e) => setLogToDate(e.target.value)} />
+          </>
+        )}
         <button className="ims-bulk-issue-btn" onClick={() => setShowBulkIssue(true)}>
           <UploadCloud size={15} /> Bulk Issue Upload
         </button>
@@ -425,11 +553,24 @@ export default function IMS() {
         </button>
       </div>
 
+      <div className="ims-tabs">
+        <button className={`ims-tab-btn ${viewTab === "inventory" ? "active" : ""}`} onClick={() => setViewTab("inventory")}>
+          <Boxes size={14} /> Inventory
+        </button>
+        <button className={`ims-tab-btn ${viewTab === "log" ? "active" : ""}`} onClick={() => setViewTab("log")}>
+          <PackageMinus size={14} /> Material Issue Log
+        </button>
+      </div>
+
       {error && <div className="ims-error">{error}</div>}
 
       {showIssueForm && (
         <form className="ims-issue-card" onSubmit={submitIssue}>
           <div className="ims-form-grid">
+            <div className="ims-form-field">
+              <label>Issue Date</label>
+              <input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
+            </div>
             <div className="ims-form-field">
               <label>Category</label>
               <select value={issueCategory} onChange={(e) => { setIssueCategory(e.target.value); setIssueMaterialName(""); }}>
@@ -444,7 +585,18 @@ export default function IMS() {
               )}
             </div>
             <div className="ims-form-field"><label>Qty to Issue</label><input type="number" value={issueQty} onChange={(e) => setIssueQty(e.target.value)} placeholder="0" /></div>
-            <div className="ims-form-field"><label>Issued To</label><input value={issuedTo} onChange={(e) => setIssuedTo(e.target.value)} placeholder="e.g. Production Floor" /></div>
+            <div className="ims-form-field">
+              <label>Section</label>
+              <select value={issueSection} onChange={(e) => setIssueSection(e.target.value)}>
+                <option value="">- Select Section -</option>
+                {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <div className="ims-quick-add">
+                <input value={newSectionInput} onChange={(e) => setNewSectionInput(e.target.value)} placeholder="+ new section" />
+                <button type="button" onClick={addSection} disabled={addingSection}><Plus size={12} /></button>
+              </div>
+            </div>
+            <div className="ims-form-field"><label>Issued To</label><input value={issuedTo} onChange={(e) => setIssuedTo(e.target.value)} placeholder="e.g. name / floor" /></div>
             <div className="ims-form-field" style={{ gridColumn: "span 2" }}><label>Remarks</label><input value={issueRemarks} onChange={(e) => setIssueRemarks(e.target.value)} placeholder="Optional" /></div>
           </div>
 
@@ -479,7 +631,17 @@ export default function IMS() {
                   {RM_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-              <div className="ims-form-field"><label>UOM (Unit)</label><input value={form.unit} onChange={(e) => updateForm("unit", e.target.value)} placeholder="e.g. Kg, Ltr, Sheet" /></div>
+              <div className="ims-form-field">
+                <label>UOM (Unit)</label>
+                <select value={form.unit} onChange={(e) => updateForm("unit", e.target.value)}>
+                  <option value="">- Select Unit -</option>
+                  {uomList.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+                <div className="ims-quick-add">
+                  <input value={newUomInput} onChange={(e) => setNewUomInput(e.target.value)} placeholder="+ new unit" />
+                  <button type="button" onClick={addUom} disabled={addingUom}><Plus size={12} /></button>
+                </div>
+              </div>
               <div className="ims-form-field"><label>Opening Qty</label><input type="number" value={form.qty} onChange={(e) => updateForm("qty", e.target.value)} placeholder="0" /></div>
               <div className="ims-form-field"><label>Min Stock</label><input type="number" value={form.min} onChange={(e) => updateForm("min", e.target.value)} placeholder="0" /></div>
               <div className="ims-form-field"><label>Max Stock</label><input type="number" value={form.max} onChange={(e) => updateForm("max", e.target.value)} placeholder="0" /></div>
@@ -510,6 +672,7 @@ export default function IMS() {
         </form>
       )}
 
+      {viewTab === "inventory" && (
       <div className="ims-card">
         {loading ? (
           <div className="ims-loading"><Loader2 size={20} className="ims-spin" /></div>
@@ -520,7 +683,7 @@ export default function IMS() {
             <thead>
               <tr>
                 <th>Type</th><th>Code</th><th>Name</th><th>Category / Specs</th><th>UOM</th>
-                <th>Closing Stock</th><th>30d Activity</th><th>Monthly Consumption</th><th>Min</th><th>Max</th><th>Status</th>
+                <th>Closing Stock</th><th>Activity</th><th>Consumption</th><th>Min</th><th>Max</th><th>Status</th>
                 <th>Location</th><th>Remarks</th><th></th>
               </tr>
             </thead>
@@ -532,9 +695,21 @@ export default function IMS() {
                   <tr key={row.key} className={isLow && !isEditing ? "ims-row-low" : ""}>
                     <td><span className={`ims-kind-badge ${row.kind === "RM" ? "ims-kind-rm" : "ims-kind-fg"}`}>{row.kind}</span></td>
                     <td><span className="ims-code">{row.code}</span></td>
-                    <td>{row.name}</td>
                     <td>
-                      {row.kind === "RM" ? <span className="ims-cat-badge">{row.category}</span> : <span className="ims-specs">{row.specs}</span>}
+                      {isEditing && row.kind === "RM" ? (
+                        <input className="ims-edit-input wide" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+                      ) : (row.name)}
+                    </td>
+                    <td>
+                      {isEditing && row.kind === "RM" ? (
+                        <select className="ims-edit-input wide" value={editForm.category} onChange={(e) => setEditForm((f) => ({ ...f, category: e.target.value }))}>
+                          {RM_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      ) : row.kind === "RM" ? (
+                        <span className="ims-cat-badge">{row.category}</span>
+                      ) : (
+                        <span className="ims-specs">{row.specs}</span>
+                      )}
                     </td>
                     <td>{row.unit}</td>
                     <td>
@@ -599,23 +774,27 @@ export default function IMS() {
           </table>
         )}
       </div>
+      )}
 
+      {viewTab === "log" && (
+      <>
       <div className="ims-log-title"><PackageMinus size={16} /> Material Issue Log</div>
       <div className="ims-log-card">
-        {issueLog.length === 0 ? (
-          <div className="ims-log-empty">No material issued yet.</div>
+        {filteredLog.length === 0 ? (
+          <div className="ims-log-empty">No material issue records match this filter.</div>
         ) : (
           <table className="ims-log-table">
             <thead>
-              <tr><th>Date</th><th>Item Code</th><th>Material</th><th>Category</th><th>Opening Qty</th><th>Issued Qty</th><th>Closing Qty</th><th>Issued To</th><th>Remarks</th></tr>
+              <tr><th>Date</th><th>Item Code</th><th>Material</th><th>Category</th><th>Section</th><th>Opening Qty</th><th>Issued Qty</th><th>Closing Qty</th><th>Issued To</th><th>Remarks</th></tr>
             </thead>
             <tbody>
-              {issueLog.map((i) => (
+              {filteredLog.map((i) => (
                 <tr key={i.id}>
                   <td>{fmtDate(i.issue_date)}</td>
                   <td><span className="ims-code">{i.raw_materials?.item_code || "-"}</span></td>
                   <td>{i.raw_materials?.name || "Unknown"}</td>
                   <td><span className="ims-cat-badge">{i.raw_materials?.category || "-"}</span></td>
+                  <td>{i.section || "-"}</td>
                   <td>{i.qty_before} {i.raw_materials?.unit}</td>
                   <td><span className="ims-qty" style={{ color: "#c23c33" }}>-{i.qty_issued} {i.raw_materials?.unit}</span></td>
                   <td><span className="ims-qty" style={{ color: "#1a8a4c" }}>{i.qty_after} {i.raw_materials?.unit}</span></td>
@@ -627,6 +806,8 @@ export default function IMS() {
           </table>
         )}
       </div>
+      </>
+      )}
 
       {showBulkIssue && (
         <BulkIssueUpload

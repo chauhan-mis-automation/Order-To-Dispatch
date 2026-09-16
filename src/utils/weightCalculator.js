@@ -73,6 +73,19 @@ function getDoorDims(sKey) {
   return { l: lm, w: wm };
 }
 
+// Fallback for sheet-type sizes (Plywood/Blockboard) NOT in the fixed mtrMap/sqFtMap
+// tables — e.g. a newly-added size like "9x4". Parses "LxW" as feet (the sheet-size
+// convention) and converts to meters, exactly like getDoorDims() already does for
+// inches. Guarded to small numbers so it never collides with door-style sizes.
+function getSheetDims(sKey) {
+  const m = sKey.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lft = parseFloat(m[1]);
+  const wft = parseFloat(m[2]);
+  if (!lft || !wft || lft > 20 || wft > 20) return null; // sheet sizes are small (feet); anything bigger is likely a door (inches)
+  return { l: lft * 0.3048, w: wft * 0.3048, sqFt: lft * wft };
+}
+
 /**
  * Pure calculation — same math as calculateRow(), no DOM.
  *
@@ -120,8 +133,8 @@ export function calculateItemWeight({ itemName = "", size = "", thickness = "", 
       sqMtr = dims.l * dims.w * qtyNum;
     }
   } else if (isBlockboard) {
-    const dims = mtrMap[sKey];
-    const sqFt = sqFtMap[sKey] || 0;
+    const dims = mtrMap[sKey] || getSheetDims(sKey);
+    const sqFt = sqFtMap[sKey] || (dims && dims.sqFt) || 0;
     if (dims) {
       naValue = (dims.l * dims.w * 12 * qtyNum) / 4;
       sqMtr = dims.l * dims.w * qtyNum;
@@ -131,12 +144,13 @@ export function calculateItemWeight({ itemName = "", size = "", thickness = "", 
     } else if (thk === 25) {
       const kgPcs = bb25KgMap[sKey];
       if (kgPcs !== undefined) weightTon = (kgPcs * qtyNum) / 1000;
+      else if (sqFt > 0) weightTon = (sqFt * (25 / 19) * BB19_FACTOR * qtyNum) / 1000; // fallback for a size not in the 25mm table
     } else if (sqFt > 0 && thk > 0) {
       weightTon = (sqFt * (thk / 19) * BB19_FACTOR * qtyNum) / 1000;
     }
   } else if (nameNorm.length > 0) {
-    const dims = mtrMap[sKey];
-    const sqFt = sqFtMap[sKey] || 0;
+    const dims = mtrMap[sKey] || getSheetDims(sKey);
+    const sqFt = sqFtMap[sKey] || (dims && dims.sqFt) || 0;
     if (dims && thk > 0) {
       naValue = (dims.l * dims.w * thk * qtyNum) / 4;
       sqMtr = dims.l * dims.w * qtyNum;

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Eye, Pencil, ChevronDown, RotateCcw, FileSpreadsheet, Loader2, Search,
-  CheckCircle2, PauseCircle, XCircle,
+  CheckCircle2, PauseCircle, XCircle, Printer, ArrowDownAZ,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
@@ -9,12 +9,14 @@ import ComboBox from "../components/ui/ComboBox";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
 
-const STATUSES = ["Pending", "Indent Raised", "On Hold"];
+const PENDING_STATUSES = ["Pending", "Indent Raised", "On Hold"];
+const APPROVED_STATUSES = ["Confirmed"];
 
 const STATUS_STYLES = {
   Pending: { bg: "#fdeceb", color: "#c23c33" },
   "Indent Raised": { bg: "#f1f2f6", color: "#4a4d5c" },
   "On Hold": { bg: "#fff4de", color: "#b5620f" },
+  Confirmed: { bg: "#eafaf1", color: "#1a8a4c" },
 };
 
 function formatDate(d) {
@@ -35,6 +37,11 @@ export default function Verification({ currentUser, onEditOrder }) {
   const [salesFilter, setSalesFilter] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState("pending"); // "pending" | "approved"
+  const [sortAlpha, setSortAlpha] = useState(false);
+  const [apprFromDate, setApprFromDate] = useState("");
+  const [apprToDate, setApprToDate] = useState("");
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   const [openMenuId, setOpenMenuId] = useState(null);
   const [viewOrderId, setViewOrderId] = useState(null);
@@ -46,10 +53,11 @@ export default function Verification({ currentUser, onEditOrder }) {
   const loadOrders = useCallback(async () => {
     setLoading(true);
     setErrorMsg("");
+    const statuses = viewMode === "approved" ? APPROVED_STATUSES : PENDING_STATUSES;
     const { data, error } = await supabase
       .from("orders")
       .select("*")
-      .in("status", STATUSES)
+      .in("status", statuses)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -58,17 +66,20 @@ export default function Verification({ currentUser, onEditOrder }) {
       setOrders(data || []);
     }
     setLoading(false);
-  }, []);
+  }, [viewMode]);
 
   useEffect(() => {
     loadOrders();
+    setSelectedIds(new Set());
   }, [loadOrders]);
 
   const filtered = useMemo(() => {
-    return orders.filter((o) => {
+    let result = orders.filter((o) => {
       if (partyFilter && o.party_name !== partyFilter) return false;
       if (salesFilter && o.sales_person !== salesFilter) return false;
       if (brandFilter && o.brand !== brandFilter) return false;
+      if (apprFromDate && (!o.approved_at || o.approved_at.split("T")[0] < apprFromDate)) return false;
+      if (apprToDate && (!o.approved_at || o.approved_at.split("T")[0] > apprToDate)) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         const hay = `${o.order_id} ${o.party_name} ${o.brand || ""} ${o.destination || ""} ${o.sales_person || ""}`.toLowerCase();
@@ -76,13 +87,70 @@ export default function Verification({ currentUser, onEditOrder }) {
       }
       return true;
     });
-  }, [orders, partyFilter, salesFilter, brandFilter, search]);
+    if (sortAlpha) {
+      result = [...result].sort((a, b) => a.party_name.localeCompare(b.party_name));
+    }
+    return result;
+  }, [orders, partyFilter, salesFilter, brandFilter, search, apprFromDate, apprToDate, sortAlpha]);
 
   function resetFilters() {
     setPartyFilter("");
     setSalesFilter("");
     setBrandFilter("");
     setSearch("");
+    setApprFromDate("");
+    setApprToDate("");
+    setSortAlpha(false);
+  }
+
+  function toggleSelect(orderId) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.size === filtered.length ? new Set() : new Set(filtered.map((o) => o.order_id))));
+  }
+
+  function printSelected() {
+    const toPrint = selectedIds.size > 0 ? filtered.filter((o) => selectedIds.has(o.order_id)) : filtered;
+    if (toPrint.length === 0) {
+      alert("No records to print.");
+      return;
+    }
+    const title = viewMode === "approved" ? "Approved Orders" : "Verification / Hold List";
+    const rowsHtml = toPrint.map((o) => `<tr>
+        <td>${o.order_id}</td><td>${formatDate(o.order_date)}</td><td>${o.party_name}</td>
+        <td>${o.brand || "-"}</td><td>${o.destination || "-"}</td><td>${o.sales_person || "-"}</td>
+        <td class="num">${o.total_qty}</td><td class="num">${Number(o.total_weight).toFixed(3)}</td>
+        <td>${o.status}</td><td>${formatDate(o.approved_at)}</td>
+      </tr>`).join("");
+    const html = `<!DOCTYPE html><html><head><title>${title}</title><style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 20px; color: #1c1e26; }
+      h1 { font-size: 18px; border-bottom: 2px solid #14161f; padding-bottom: 10px; }
+      .sub { color: #9295a8; font-size: 12px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { border: 1px solid #dee2e6; padding: 6px 8px; text-align: left; }
+      thead { background: #14161f; color: #fff; }
+      td.num, th.num { text-align: right; }
+      @media print { #printBtn { display: none; } }
+    </style></head><body>
+      <h1>${title}</h1>
+      <div class="sub">Generated ${formatDate(new Date())} — ${toPrint.length} record(s)</div>
+      <table>
+        <thead><tr><th>Order ID</th><th>Date</th><th>Party</th><th>Brand</th><th>Destination</th><th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Appr. Date</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div style="text-align:center; margin-top:20px;">
+        <button id="printBtn" onclick="window.print()" style="padding:10px 22px; font-size:15px; cursor:pointer;">Print / Save as PDF</button>
+      </div>
+    </body></html>`;
+    const win = window.open("", title, "width=950,height=850");
+    win.document.write(html);
+    win.document.close();
   }
 
   async function requestAction(orderId, newStatus) {
@@ -156,6 +224,14 @@ export default function Verification({ currentUser, onEditOrder }) {
     <div className="vf-root">
       <style>{`
         .vf-root { font-family: 'Inter', sans-serif; color: #1c1e26; }
+
+        .vf-tabs { display: flex; gap: 6px; background: #f6f7fb; border-radius: 12px; padding: 5px; margin-bottom: 14px; width: fit-content; }
+        .vf-tab-btn { border: none; background: transparent; color: #5b5f72; padding: 9px 18px; border-radius: 9px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
+        .vf-tab-btn.active { background: #14161f; color: #fff; }
+        .vf-date-label { display: block; font-size: 11px; font-weight: 700; color: #5b5f72; margin-bottom: 6px; }
+        .vf-date-input { width: 100%; box-sizing: border-box; border: 1px solid #e1e3ec; border-radius: 10px; padding: 9px 11px; font-size: 13px; }
+        .vf-btn-sort-active { background: #e8f1ff; color: #1d5fc7; }
+        .vf-print-btn { border: 1px solid #cfe0ff; background: #e8f1ff; color: #1d5fc7; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 
         .vf-filterbar {
           background: #fff; border: 1px solid #eceef4; border-radius: 16px;
@@ -253,6 +329,15 @@ export default function Verification({ currentUser, onEditOrder }) {
         }
       `}</style>
 
+      <div className="vf-tabs">
+        <button className={`vf-tab-btn ${viewMode === "pending" ? "active" : ""}`} onClick={() => setViewMode("pending")}>
+          Pending / Hold
+        </button>
+        <button className={`vf-tab-btn ${viewMode === "approved" ? "active" : ""}`} onClick={() => setViewMode("approved")}>
+          Approved
+        </button>
+      </div>
+
       <div className="vf-filterbar">
         <div className="vf-filter-item">
           <ComboBox label="Party" value={partyFilter} onChange={setPartyFilter} options={master.parties} placeholder="All Parties" />
@@ -263,7 +348,18 @@ export default function Verification({ currentUser, onEditOrder }) {
         <div className="vf-filter-item">
           <ComboBox label="Brand" value={brandFilter} onChange={setBrandFilter} options={master.brands} placeholder="All Brands" />
         </div>
+        <div className="vf-filter-item">
+          <label className="vf-date-label">Approval Date From</label>
+          <input type="date" className="vf-date-input" value={apprFromDate} onChange={(e) => setApprFromDate(e.target.value)} />
+        </div>
+        <div className="vf-filter-item">
+          <label className="vf-date-label">Approval Date To</label>
+          <input type="date" className="vf-date-input" value={apprToDate} onChange={(e) => setApprToDate(e.target.value)} />
+        </div>
         <div className="vf-actions-row">
+          <button className={`vf-btn ${sortAlpha ? "vf-btn-sort-active" : "vf-btn-reset"}`} onClick={() => setSortAlpha((s) => !s)}>
+            <ArrowDownAZ size={14} /> {sortAlpha ? "Sorted A-Z" : "Sort A-Z"}
+          </button>
           <button className="vf-btn vf-btn-reset" onClick={resetFilters}>
             <RotateCcw size={14} /> Reset
           </button>
@@ -271,9 +367,14 @@ export default function Verification({ currentUser, onEditOrder }) {
       </div>
 
       <div className="vf-toolbar">
-        <button className="vf-csv-btn" onClick={exportCsv}>
-          <FileSpreadsheet size={15} /> Export to CSV
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="vf-csv-btn" onClick={exportCsv}>
+            <FileSpreadsheet size={15} /> Export to CSV
+          </button>
+          <button className="vf-print-btn" onClick={printSelected}>
+            <Printer size={15} /> {selectedIds.size > 0 ? `Print Selected (${selectedIds.size})` : "Print All"}
+          </button>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <div className="vf-search">
             <Search size={14} />
@@ -295,6 +396,9 @@ export default function Verification({ currentUser, onEditOrder }) {
             <table className="vf-table">
               <thead>
                 <tr>
+                  <th style={{ width: 34 }}>
+                    <input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0} onChange={toggleSelectAll} />
+                  </th>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
                   <th>Plan Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
@@ -305,6 +409,9 @@ export default function Verification({ currentUser, onEditOrder }) {
                   const badgeStyle = STATUS_STYLES[o.status] || { bg: "#f1f2f6", color: "#4a4d5c" };
                   return (
                     <tr key={o.order_id}>
+                      <td data-label="Select">
+                        <input type="checkbox" checked={selectedIds.has(o.order_id)} onChange={() => toggleSelect(o.order_id)} />
+                      </td>
                       <td data-label="Order ID"><span className="vf-oid">{o.order_id}</span></td>
                       <td data-label="Date">{formatDate(o.order_date)}</td>
                       <td data-label="Party Name">{o.party_name}</td>
@@ -331,24 +438,28 @@ export default function Verification({ currentUser, onEditOrder }) {
                           <button className="vf-iconbtn" title="Edit Order" onClick={() => onEditOrder && onEditOrder(o.order_id)}>
                             <Pencil size={14} />
                           </button>
-                          <button
-                            className="vf-menu-btn"
-                            onClick={() => setOpenMenuId(openMenuId === o.order_id ? null : o.order_id)}
-                          >
-                            Action <ChevronDown size={13} />
-                          </button>
-                          {openMenuId === o.order_id && (
-                            <div className="vf-menu-panel" onMouseLeave={() => setOpenMenuId(null)}>
-                              <div className="vf-menu-item vf-menu-approve" onClick={() => requestAction(o.order_id, "Confirmed")}>
-                                <CheckCircle2 size={15} /> Approve
-                              </div>
-                              <div className="vf-menu-item vf-menu-hold" onClick={() => requestAction(o.order_id, "On Hold")}>
-                                <PauseCircle size={15} /> Hold
-                              </div>
-                              <div className="vf-menu-item vf-menu-cancel" onClick={() => requestAction(o.order_id, "Cancelled")}>
-                                <XCircle size={15} /> Cancel
-                              </div>
-                            </div>
+                          {viewMode === "pending" && (
+                            <>
+                              <button
+                                className="vf-menu-btn"
+                                onClick={() => setOpenMenuId(openMenuId === o.order_id ? null : o.order_id)}
+                              >
+                                Action <ChevronDown size={13} />
+                              </button>
+                              {openMenuId === o.order_id && (
+                                <div className="vf-menu-panel" onMouseLeave={() => setOpenMenuId(null)}>
+                                  <div className="vf-menu-item vf-menu-approve" onClick={() => requestAction(o.order_id, "Confirmed")}>
+                                    <CheckCircle2 size={15} /> Approve
+                                  </div>
+                                  <div className="vf-menu-item vf-menu-hold" onClick={() => requestAction(o.order_id, "On Hold")}>
+                                    <PauseCircle size={15} /> Hold
+                                  </div>
+                                  <div className="vf-menu-item vf-menu-cancel" onClick={() => requestAction(o.order_id, "Cancelled")}>
+                                    <XCircle size={15} /> Cancel
+                                  </div>
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>

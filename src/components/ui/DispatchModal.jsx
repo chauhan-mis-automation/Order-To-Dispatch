@@ -12,32 +12,16 @@ function newId() {
   return `d_${Date.now()}_${idCounter}`;
 }
 
-function toDispatchRow(item) {
-  return {
-    id: newId(),
-    itemName: item.item_name,
-    brand: item.brand,
-    size: item.size,
-    thickness: item.thickness,
-    qty: item.qty,
-    na: Number(item.na || 0).toFixed(3),
-    weightTon: Number(item.weight_ton || 0).toFixed(3),
-    sqMtr: "0.00",
-    shade: item.shade || "",
-    model: item.model || "",
-    remark: "",
-  };
-}
-
-function keyFor(row) {
-  return `${row.itemName}_${row.brand || ""}_${row.size}_${row.thickness}`.toUpperCase();
+function keyFor(itemName, brand, size, thickness) {
+  return `${itemName}_${brand || ""}_${size}_${thickness}`.toUpperCase();
 }
 
 export default function DispatchModal({ order, currentUser, requireLogin, onClose, onDispatched }) {
   const master = useMasterData();
 
   const [loading, setLoading] = useState(true);
-  const [originalItems, setOriginalItems] = useState([]); // immutable baseline for variance calc
+  const [orderItems, setOrderItems] = useState([]); // the original, untouched order — never overwritten
+  const [alreadyDispatchedMap, setAlreadyDispatchedMap] = useState({}); // key -> qty dispatched so far (prior actions)
   const [rows, setRows] = useState([]);
   const [fgStock, setFgStock] = useState([]);
   const [truckNo, setTruckNo] = useState("");
@@ -51,23 +35,49 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const [itemsRes, fgRes] = await Promise.all([
+      const [itemsRes, logsRes, fgRes] = await Promise.all([
         supabase.from("order_items").select("*").eq("order_id", order.order_id),
+        supabase.from("dispatch_logs").select("*").eq("order_id", order.order_id),
         supabase.from("fg_stock").select("*"),
       ]);
       if (cancelled) return;
-      if (itemsRes.error) {
-        setError(itemsRes.error.message);
-      } else {
-        setOriginalItems(itemsRes.data || []);
-        setRows((itemsRes.data || []).map(toDispatchRow).map((r) => {
-          const calc = calculateItemWeight({ itemName: r.itemName, size: r.size, thickness: r.thickness, qty: r.qty });
-          return { ...r, na: calc.na, weightTon: calc.weightTon, sqMtr: calc.sqMtr };
-        }));
-      }
+
+      const items = itemsRes.data || [];
+      setOrderItems(items);
+
+      // sum everything dispatched so far, across every prior dispatch action
+      const dispatchedMap = {};
+      (logsRes.data || []).forEach((log) => {
+        const key = keyFor(log.item_name, log.brand, log.size, log.thickness);
+        dispatchedMap[key] = (dispatchedMap[key] || 0) + (Number(log.dispatched_qty) || 0);
+      });
+      setAlreadyDispatchedMap(dispatchedMap);
+
+      // default "dispatching now" qty = whatever's still remaining for each item
+      const builtRows = items
+        .map((item) => {
+          const key = keyFor(item.item_name, item.brand, item.size, item.thickness);
+          const ordered = Number(item.qty) || 0;
+          const already = dispatchedMap[key] || 0;
+          const remaining = Math.max(0, ordered - already);
+          return {
+            id: newId(),
+            itemName: item.item_name, brand: item.brand, size: item.size, thickness: item.thickness,
+            ordered, already, qty: remaining,
+            na: "0.000", weightTon: "0.000", sqMtr: "0.00",
+            shade: item.shade || "", model: item.model || "", remark: "",
+          };
+        })
+        .filter((r) => r.ordered > r.already); // fully-dispatched items don't need to show up again
+
+      setRows(builtRows.map((r) => {
+        const calc = calculateItemWeight({ itemName: r.itemName, size: r.size, thickness: r.thickness, qty: r.qty });
+        return { ...r, na: calc.na, weightTon: calc.weightTon, sqMtr: calc.sqMtr };
+      }));
+
       setFgStock(fgRes.data || []);
-      setTruckNo(order.truck_no || "");
-      setBillAmount(order.bill_amount || "");
+      setTruckNo("");
+      setBillAmount("");
       setLoading(false);
     }
     load();
@@ -96,7 +106,7 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
     if (!newItemName.trim()) return;
     const base = { itemName: newItemName.trim(), brand: order.brand, size: "", thickness: "", qty: 0, remark: "", shade: "", model: "" };
     const calc = calculateItemWeight(base);
-    setRows((prev) => [...prev, { id: newId(), ...base, na: calc.na, weightTon: calc.weightTon, sqMtr: calc.sqMtr }]);
+    setRows((prev) => [...prev, { id: newId(), ...base, ordered: 0, already: 0, na: calc.na, weightTon: calc.weightTon, sqMtr: calc.sqMtr }]);
     setNewItemName("");
   }
 
@@ -121,78 +131,30 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
     setSaving(true);
     setError("");
     try {
-      // ---- variance log: group original (ordered) vs current (dispatched) by item key ----
-      const map = {};
-      originalItems.forEach((it) => {
-        const key = `${it.item_name}_${it.brand || ""}_${it.size}_${it.thickness}`.toUpperCase();
-        if (!map[key]) map[key] = { item_name: it.item_name, brand: it.brand, size: it.size, thickness: it.thickness, ordered: 0, dispatched: 0 };
-        map[key].ordered += Number(it.qty) || 0;
-      });
-      rows.forEach((r) => {
-        const key = keyFor(r);
-        if (!map[key]) map[key] = { item_name: r.itemName, brand: r.brand, size: r.size, thickness: r.thickness, ordered: 0, dispatched: 0 };
-        map[key].dispatched += Number(r.qty) || 0;
-      });
-
-      const logRows = Object.values(map).map((d) => {
-        const pending = d.ordered - d.dispatched;
-        const status = pending === 0 ? "Full" : pending > 0 ? "Short" : "Excess";
-        return {
-          order_id: order.order_id,
-          dispatched_by: userName,
-          item_name: d.item_name,
-          brand: d.brand,
-          size: d.size,
-          thickness: d.thickness,
-          ordered_qty: d.ordered,
-          dispatched_qty: d.dispatched,
-          pending_qty: pending,
-          variance_status: status,
-        };
-      });
+      // ---- log this dispatch action ----
+      const logRows = rows
+        .filter((r) => (Number(r.qty) || 0) > 0)
+        .map((r) => {
+          const nowDispatched = Number(r.qty) || 0;
+          const totalDispatchedAfter = r.already + nowDispatched;
+          const pending = Math.max(0, r.ordered - totalDispatchedAfter);
+          const status = totalDispatchedAfter >= r.ordered ? "Full" : "Short";
+          return {
+            order_id: order.order_id,
+            dispatched_by: userName,
+            item_name: r.itemName, brand: r.brand, size: r.size, thickness: r.thickness,
+            ordered_qty: r.ordered, dispatched_qty: nowDispatched, pending_qty: pending,
+            variance_status: pending === 0 ? status : (totalDispatchedAfter > r.ordered ? "Excess" : "Short"),
+            truck_no: truckNo || null, bill_amount: billAmount ? Number(billAmount) : null,
+          };
+        });
 
       if (logRows.length > 0) {
         const { error: logErr } = await supabase.from("dispatch_logs").insert(logRows);
         if (logErr) throw logErr;
       }
 
-      // ---- update order master ----
-      const orderUpdate = {
-        status: "Dispatched",
-        truck_no: truckNo || null,
-        bill_amount: billAmount ? Number(billAmount) : null,
-        total_qty: totals.pcs,
-        total_weight: totals.weight,
-      };
-      if (order.original_qty === null || order.original_qty === undefined) {
-        orderUpdate.original_qty = order.total_qty;
-      }
-      const { error: orderErr } = await supabase.from("orders").update(orderUpdate).eq("order_id", order.order_id);
-      if (orderErr) throw orderErr;
-
-      // ---- replace order_items with the final dispatched set ----
-      const { error: delErr } = await supabase.from("order_items").delete().eq("order_id", order.order_id);
-      if (delErr) throw delErr;
-
-      const newItemRows = rows.map((r) => ({
-        order_id: order.order_id,
-        item_name: r.itemName,
-        brand: r.brand,
-        size: r.size,
-        thickness: r.thickness,
-        qty: Number(r.qty) || 0,
-        na: Number(r.na) || 0,
-        weight_ton: Number(r.weightTon) || 0,
-        shade: r.shade || null,
-        model: r.model || null,
-        remark: r.remark || null,
-      }));
-      if (newItemRows.length > 0) {
-        const { error: insErr } = await supabase.from("order_items").insert(newItemRows);
-        if (insErr) throw insErr;
-      }
-
-      // deduct dispatched quantities from finished-goods stock
+      // deduct only what's being dispatched THIS round from finished-goods stock
       for (const r of rows) {
         const qtyDispatched = Number(r.qty) || 0;
         if (qtyDispatched <= 0) continue;
@@ -213,6 +175,31 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
         }
       }
 
+      // ---- figure out whether the WHOLE order is now fully dispatched, or still partial ----
+      // order_items is never touched — it always reflects the original demand
+      const { data: freshLogs } = await supabase.from("dispatch_logs").select("*").eq("order_id", order.order_id);
+      const totalDispatchedMap = {};
+      (freshLogs || []).forEach((log) => {
+        const key = keyFor(log.item_name, log.brand, log.size, log.thickness);
+        totalDispatchedMap[key] = (totalDispatchedMap[key] || 0) + (Number(log.dispatched_qty) || 0);
+      });
+      const isFullyDispatched = orderItems.every((item) => {
+        const key = keyFor(item.item_name, item.brand, item.size, item.thickness);
+        return (totalDispatchedMap[key] || 0) >= (Number(item.qty) || 0);
+      });
+
+      const orderUpdate = {
+        status: isFullyDispatched ? "Dispatched" : "Partially Dispatched",
+        truck_no: truckNo || order.truck_no || null,
+        bill_amount: billAmount ? Number(billAmount) : order.bill_amount || null,
+      };
+      if (isFullyDispatched) orderUpdate.dispatched_at = new Date().toISOString();
+      if (order.original_qty === null || order.original_qty === undefined) {
+        orderUpdate.original_qty = order.total_qty;
+      }
+      const { error: orderErr } = await supabase.from("orders").update(orderUpdate).eq("order_id", order.order_id);
+      if (orderErr) throw orderErr;
+
       setSaving(false);
       onDispatched && onDispatched();
     } catch (err) {
@@ -230,6 +217,8 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
     requireLogin((userName) => performDispatch(userName));
   }
 
+  const allFullyDispatched = !loading && rows.length === 0;
+
   return (
     <div className="dm-overlay" onClick={onClose}>
       <div className="dm-card" onClick={(e) => e.stopPropagation()}>
@@ -244,6 +233,8 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
         <div className="dm-body">
           {loading ? (
             <div className="dm-loading"><Loader2 size={22} className="dm-spin" /> Loading items...</div>
+          ) : allFullyDispatched ? (
+            <div className="dm-loading">Everything on this order has already been dispatched.</div>
           ) : (
             <>
               <div className="dm-info-grid">
@@ -251,11 +242,11 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
                 <div><span>Brand</span><strong>{order.brand || "-"}</strong></div>
                 <div><span>Destination</span><strong>{order.destination || "-"}</strong></div>
                 <div>
-                  <span>Truck No</span>
+                  <span>Truck No (this shipment)</span>
                   <input className="dm-field-input" value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. OD05 AB 1234" />
                 </div>
                 <div>
-                  <span>Bill Amount (₹, incl. GST)</span>
+                  <span>Bill Amount (₹, this shipment)</span>
                   <input type="number" className="dm-field-input" value={billAmount} onChange={(e) => setBillAmount(e.target.value)} placeholder="0.00" />
                 </div>
               </div>
@@ -263,72 +254,71 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
               {error && <div className="dm-error">{error}</div>}
 
               <div className="dm-items-head">
-                <span>Item</span><span>Thk</span><span>Size</span><span>Pcs</span>
-                <span>Sq.M</span><span>Wt(Ton)</span><span>Remark</span><span></span>
+                <span>Item</span><span>Thk</span><span>Size</span><span>Ordered / Pending</span>
+                <span>Dispatching Now</span><span>Wt(Ton)</span><span>Remark</span><span></span>
               </div>
 
-              {rows.map((row) => (
-                <div className="dm-item-row" key={row.id}>
-                  <div className="dm-field-full">
-                    <span className="dm-field-label">Item</span>
-                    <div className="dm-item-name">
-                      {row.itemName}
-                      {row.model && <span className="dm-badge dm-badge-blue">{row.model}</span>}
+              {rows.map((row) => {
+                const remainingAfterThis = row.ordered - row.already - (Number(row.qty) || 0);
+                return (
+                  <div className="dm-item-row" key={row.id}>
+                    <div className="dm-field-full">
+                      <span className="dm-field-label">Item</span>
+                      <div className="dm-item-name">
+                        {row.itemName}
+                        {row.model && <span className="dm-badge dm-badge-blue">{row.model}</span>}
+                        {row.already > 0 && <span className="dm-badge dm-badge-green">{row.already} already dispatched</span>}
+                      </div>
+                      {isMembraneFamily(row.itemName) && (
+                        <select className="dm-select" value={row.shade} onChange={(e) => updateRow(row.id, "shade", e.target.value)}>
+                          <option value="">- Shade -</option>
+                          <option value="RW">RW</option>
+                          <option value="AT">AT</option>
+                        </select>
+                      )}
                     </div>
-                    {isMembraneFamily(row.itemName) && (
-                      <select className="dm-select" value={row.shade} onChange={(e) => updateRow(row.id, "shade", e.target.value)}>
-                        <option value="">- Shade -</option>
-                        <option value="RW">RW</option>
-                        <option value="AT">AT</option>
-                      </select>
-                    )}
-                  </div>
-                  <div>
-                    <span className="dm-field-label">Thk</span>
-                    <ComboBox value={row.thickness} onChange={(v) => updateRow(row.id, "thickness", v)} options={master.thickness} placeholder="Thk" />
-                  </div>
-                  <div>
-                    <span className="dm-field-label">Size</span>
-                    <ComboBox value={row.size} onChange={(v) => updateRow(row.id, "size", v)} options={master.sizesFt} placeholder="Size" />
-                  </div>
-                  <div>
-                    <span className="dm-field-label">Pcs</span>
-                    <input type="number" className="dm-qty-input" value={row.qty} onChange={(e) => updateRow(row.id, "qty", e.target.value)} />
-                    {(() => {
-                      const stockRow = fgStock.find(
-                        (f) => f.item_name === row.itemName && (f.brand || "") === (row.brand || "") && f.size === row.size && f.thickness === row.thickness
-                      );
-                      const available = stockRow ? Number(stockRow.qty_available) : 0;
-                      const over = (Number(row.qty) || 0) > available;
-                      if (!stockRow) {
-                        return (
-                          <div className="dm-stock-hint dm-stock-over">
-                            ⚠️ No stock record for "{row.brand || "no brand"}" — will NOT deduct
-                          </div>
+                    <div>
+                      <span className="dm-field-label">Thk</span>
+                      <ComboBox value={row.thickness} onChange={(v) => updateRow(row.id, "thickness", v)} options={master.thickness} placeholder="Thk" />
+                    </div>
+                    <div>
+                      <span className="dm-field-label">Size</span>
+                      <ComboBox value={row.size} onChange={(v) => updateRow(row.id, "size", v)} options={master.sizesFt} placeholder="Size" />
+                    </div>
+                    <div>
+                      <span className="dm-field-label">Ordered / Pending</span>
+                      <div className="dm-readonly" style={{ textAlign: "center" }}>{row.ordered} / {Math.max(0, row.ordered - row.already)}</div>
+                    </div>
+                    <div>
+                      <span className="dm-field-label">Dispatching Now</span>
+                      <input type="number" className="dm-qty-input" value={row.qty} onChange={(e) => updateRow(row.id, "qty", e.target.value)} />
+                      {remainingAfterThis > 0 && (
+                        <div className="dm-stock-hint">{remainingAfterThis} will remain pending after this</div>
+                      )}
+                      {(() => {
+                        const stockRow = fgStock.find(
+                          (f) => f.item_name === row.itemName && (f.brand || "") === (row.brand || "") && f.size === row.size && f.thickness === row.thickness
                         );
-                      }
-                      return (
-                        <div className={`dm-stock-hint ${over ? "dm-stock-over" : ""}`}>
-                          Stock: {available} {over ? "⚠️ exceeds stock" : ""}
-                        </div>
-                      );
-                    })()}
+                        const available = stockRow ? Number(stockRow.qty_available) : 0;
+                        const over = (Number(row.qty) || 0) > available;
+                        if (!stockRow) {
+                          return <div className="dm-stock-hint dm-stock-over">⚠️ No stock record for "{row.brand || "no brand"}" — will NOT deduct</div>;
+                        }
+                        return <div className={`dm-stock-hint ${over ? "dm-stock-over" : ""}`}>Stock: {available} {over ? "⚠️ exceeds stock" : ""}</div>;
+                      })()}
+                    </div>
+                    <div>
+                      <span className="dm-field-label">Wt(Ton)</span>
+                      <div className="dm-readonly">{row.weightTon}</div>
+                    </div>
+                    <div>
+                      <span className="dm-field-label">Remark</span>
+                      <input className="dm-remark-input" value={row.remark} onChange={(e) => updateRow(row.id, "remark", e.target.value)} />
+                    </div>
+                    <button className="dm-del-btn" onClick={() => removeRow(row.id)} title="Remove"><Trash2 size={14} /></button>
                   </div>
-                  <div>
-                    <span className="dm-field-label">Sq.M</span>
-                    <div className="dm-readonly">{row.sqMtr}</div>
-                  </div>
-                  <div>
-                    <span className="dm-field-label">Wt(Ton)</span>
-                    <div className="dm-readonly">{row.weightTon}</div>
-                  </div>
-                  <div>
-                    <span className="dm-field-label">Remark</span>
-                    <input className="dm-remark-input" value={row.remark} onChange={(e) => updateRow(row.id, "remark", e.target.value)} />
-                  </div>
-                  <button className="dm-del-btn" onClick={() => removeRow(row.id)} title="Remove"><Trash2 size={14} /></button>
-                </div>
-              ))}
+                );
+              })}
 
               <div className="dm-add-row">
                 <ComboBox value={newItemName} onChange={setNewItemName} options={master.items} placeholder="Search item to add..." />
@@ -336,14 +326,14 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
               </div>
 
               <div className="dm-totals">
-                <div className="dm-total-box"><div className="dm-total-label">Total Pcs</div><div className="dm-total-value">{totals.pcs}</div></div>
-                <div className="dm-total-box"><div className="dm-total-label">Total Sq.M</div><div className="dm-total-value">{totals.sqMtr.toFixed(2)}</div></div>
-                <div className="dm-total-box"><div className="dm-total-label">Total Weight</div><div className="dm-total-value">{totals.weight.toFixed(3)}</div></div>
+                <div className="dm-total-box"><div className="dm-total-label">Dispatching Now (Pcs)</div><div className="dm-total-value">{totals.pcs}</div></div>
+                <div className="dm-total-box"><div className="dm-total-label">Sq.M</div><div className="dm-total-value">{totals.sqMtr.toFixed(2)}</div></div>
+                <div className="dm-total-box"><div className="dm-total-label">Weight</div><div className="dm-total-value">{totals.weight.toFixed(3)}</div></div>
               </div>
 
               <button className="dm-submit" onClick={handleSubmitClick} disabled={saving}>
                 {saving ? <Loader2 size={16} className="dm-spin" /> : null}
-                {saving ? "Processing..." : "Submit Inventory"}
+                {saving ? "Processing..." : "Submit Dispatch"}
               </button>
             </>
           )}
@@ -353,7 +343,7 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
       <ConfirmDialog
         open={confirmOpen}
         title="Confirm Dispatch?"
-        message={`Are you sure you want to dispatch ${order.order_id}?`}
+        message={`Dispatch ${totals.pcs} pcs for ${order.order_id}? If anything is still pending after this, the order will stay in the Dispatch queue for the remaining quantity.`}
         confirmLabel="Yes, Dispatch!"
         onConfirm={handleConfirmDispatch}
         onCancel={() => setConfirmOpen(false)}
@@ -367,7 +357,7 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
         }
         @keyframes dm-fade { from { opacity: 0; } to { opacity: 1; } }
         .dm-card {
-          width: 100%; max-width: 980px; max-height: 90vh; background: #f6f7fb; border-radius: 20px;
+          width: 100%; max-width: 1020px; max-height: 90vh; background: #f6f7fb; border-radius: 20px;
           box-shadow: 0 24px 60px rgba(10,11,20,0.3); overflow: hidden; display: flex; flex-direction: column;
           animation: dm-pop 0.2s cubic-bezier(.2,.8,.3,1);
         }
@@ -392,16 +382,17 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
         .dm-field-input:focus { border-color: #f5a623; box-shadow: 0 0 0 3px rgba(245,166,35,0.15); }
 
         .dm-items-head {
-          display: grid; grid-template-columns: 2fr 0.8fr 0.9fr 0.6fr 0.7fr 0.8fr 1fr 34px; gap: 8px;
+          display: grid; grid-template-columns: 2fr 0.8fr 0.9fr 1fr 1.2fr 0.8fr 1fr 34px; gap: 8px;
           padding: 0 10px 8px 10px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: #9295a8;
         }
         .dm-item-row {
-          display: grid; grid-template-columns: 2fr 0.8fr 0.9fr 0.6fr 0.7fr 0.8fr 1fr 34px; gap: 8px;
+          display: grid; grid-template-columns: 2fr 0.8fr 0.9fr 1fr 1.2fr 0.8fr 1fr 34px; gap: 8px;
           align-items: start; padding: 10px; border: 1px solid #eceef4; border-radius: 12px; margin-bottom: 8px; background: #fff;
         }
         .dm-item-name { font-size: 13px; font-weight: 700; color: #1c1e26; padding: 10px 0; }
         .dm-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; margin-left: 6px; }
         .dm-badge-blue { background: #e8f1ff; color: #1d5fc7; }
+        .dm-badge-green { background: #eafaf1; color: #1a8a4c; }
         .dm-select {
           margin-top: 6px; width: 100%; border: 1px solid #e1e3ec; border-radius: 8px; padding: 6px 8px; font-size: 12px;
         }

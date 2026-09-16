@@ -42,8 +42,8 @@ export default function DispatchLogModal({ orderId, onClose }) {
               <table className="dl-table">
                 <thead>
                   <tr>
-                    <th>Item</th><th>Size</th><th>Thk</th>
-                    <th>Ordered</th><th>Dispatched</th><th>Pending</th>
+                    <th>Date</th><th>Item</th><th>Size</th><th>Thk</th>
+                    <th>Ordered</th><th>Dispatched</th><th>Pending</th><th>Truck No</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -53,12 +53,14 @@ export default function DispatchLogModal({ orderId, onClose }) {
                     const cls = pending > 0 ? "dl-short" : pending < 0 ? "dl-excess" : "dl-full";
                     return (
                       <tr key={log.id}>
+                        <td className="dl-date">{log.created_at ? new Date(log.created_at).toLocaleDateString("en-GB") : "-"}</td>
                         <td className="dl-item">{log.item_name}</td>
                         <td>{log.size}</td>
                         <td>{log.thickness}</td>
                         <td className="dl-ordered">{log.ordered_qty}</td>
                         <td className="dl-dispatched">{log.dispatched_qty}</td>
                         <td className={cls}>{icon} {pending}</td>
+                        <td className="dl-truck">{log.truck_no || "-"}</td>
                       </tr>
                     );
                   })}
@@ -93,6 +95,8 @@ export default function DispatchLogModal({ orderId, onClose }) {
         .dl-short { color: #c23c33; font-weight: 700; }
         .dl-excess { color: #b5620f; font-weight: 700; }
         .dl-full { color: #1a8a4c; font-weight: 700; }
+        .dl-date { font-size: 11.5px; color: #9295a8; white-space: nowrap; }
+        .dl-truck { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; }
       `}</style>
     </div>
   );

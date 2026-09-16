@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Eye, ClipboardList, RotateCcw, FileSpreadsheet, Loader2, Search, BarChart3,
+  Eye, ClipboardList, RotateCcw, FileSpreadsheet, Loader2, Search, BarChart3, History as HistoryIcon,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
@@ -8,6 +8,7 @@ import ComboBox from "../components/ui/ComboBox";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
 import DispatchLogModal from "../components/ui/DispatchLogModal";
 import PartySummaryModal from "../components/ui/PartySummaryModal";
+import OrderEditHistoryModal from "../components/ui/OrderEditHistoryModal";
 
 const ALL_STATUSES = ["Pending", "Confirmed", "Indent Raised", "Picked", "Ready to Ship", "Dispatched", "On Hold", "Cancelled"];
 
@@ -46,6 +47,7 @@ export default function History() {
 
   const [viewOrderId, setViewOrderId] = useState(null);
   const [varianceOrderId, setVarianceOrderId] = useState(null);
+  const [editHistoryOrderId, setEditHistoryOrderId] = useState(null);
   const [showSummary, setShowSummary] = useState(false);
 
   const loadOrders = useCallback(async () => {
@@ -54,6 +56,7 @@ export default function History() {
     const { data, error } = await supabase
       .from("orders")
       .select("*")
+      .neq("status", "Partially Dispatched")
       .order("created_at", { ascending: false });
     if (error) setErrorMsg(error.message);
     else setOrders(data || []);
@@ -87,12 +90,12 @@ export default function History() {
   function exportCsv() {
     const headers = [
       "Order ID", "Date", "Party Name", "Brand", "Destination", "Sales",
-      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status", "Truck No", "Bill Amt",
+      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Dispatch Date", "Status", "Truck No", "Bill Amt",
     ];
     const rows = filtered.map((o) => [
       o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
       o.sales_person || "-", o.total_qty, o.total_weight, o.created_by || "-",
-      formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
+      formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.dispatched_at ? formatDate(o.dispatched_at) : "-", o.status,
       o.truck_no || "-", o.bill_amount || "-",
     ]);
     const csv = "\uFEFF" + [headers, ...rows]
@@ -224,7 +227,7 @@ export default function History() {
                 <tr>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
-                  <th>Plan Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
+                  <th>Plan Date</th><th>Dispatch Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -243,8 +246,14 @@ export default function History() {
                       <td data-label="User">{o.created_by || <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Appr. Date">{formatDate(o.approved_at)}</td>
                       <td data-label="Plan Date">{formatDate(o.plan_dispatch_date)}</td>
+                      <td data-label="Dispatch Date">{o.dispatched_at ? formatDate(o.dispatched_at) : <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Status">
                         <span className="hs-badge" style={{ background: badgeStyle.bg, color: badgeStyle.color }}>{o.status}</span>
+                        {o.closed_manually && (
+                          <span className="hs-badge" style={{ background: "#fdeceb", color: "#c23c33", marginLeft: 5 }} title={o.close_remark || ""}>
+                            Closed (Partial)
+                          </span>
+                        )}
                       </td>
                       <td data-label="Truck No">{o.truck_no || <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Bill Amt">{o.bill_amount ? `₹${Number(o.bill_amount).toLocaleString("en-IN")}` : <span className="hs-empty-cell">-</span>}</td>
@@ -252,6 +261,9 @@ export default function History() {
                         <div className="hs-actioncell">
                           <button className="hs-iconbtn" title="View Items" onClick={() => setViewOrderId(o.order_id)}>
                             <Eye size={14} />
+                          </button>
+                          <button className="hs-iconbtn" title="Edit History" onClick={() => setEditHistoryOrderId(o.order_id)}>
+                            <HistoryIcon size={14} />
                           </button>
                           {o.status === "Dispatched" && (
                             <button className="hs-variance-btn" onClick={() => setVarianceOrderId(o.order_id)}>
@@ -271,6 +283,7 @@ export default function History() {
 
       <OrderItemsModal orderId={viewOrderId} onClose={() => setViewOrderId(null)} />
       <DispatchLogModal orderId={varianceOrderId} onClose={() => setVarianceOrderId(null)} />
+      <OrderEditHistoryModal orderId={editHistoryOrderId} onClose={() => setEditHistoryOrderId(null)} />
       {showSummary && (
         <PartySummaryModal party={partyFilter} orders={summaryOrders} onClose={() => setShowSummary(false)} />
       )}

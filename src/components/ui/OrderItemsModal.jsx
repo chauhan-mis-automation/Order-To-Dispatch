@@ -89,6 +89,7 @@ export default function OrderItemsModal({ orderId, onClose }) {
                 <div className="oim-summary">
                   <div><span>Brand</span><strong>{order.brand || "-"}</strong></div>
                   <div><span>Destination</span><strong>{order.destination || "-"}</strong></div>
+                  <div><span>Address</span><strong>{order.address || "-"}</strong></div>
                   <div><span>Remark</span><strong>{order.remark || "-"}</strong></div>
                 </div>
               )}
@@ -128,7 +129,7 @@ export default function OrderItemsModal({ orderId, onClose }) {
         .oim-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; margin-left: 6px; }
         .oim-badge-amber { background: #fdf3e4; color: #b5620f; }
         .oim-badge-blue { background: #e8f1ff; color: #1d5fc7; }
-        .oim-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+        .oim-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 16px; }
         @media (max-width: 560px) { .oim-summary { grid-template-columns: 1fr; } }
         .oim-summary div { background: #f6f7fb; border: 1px solid #eceef4; border-radius: 10px; padding: 10px 12px; }
         .oim-summary span { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: #9295a8; margin-bottom: 3px; }

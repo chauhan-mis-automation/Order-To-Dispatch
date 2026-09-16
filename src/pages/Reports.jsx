@@ -161,6 +161,7 @@ function OrderReport() {
     Pending: { bg: "#fdeceb", color: "#c23c33" }, Confirmed: { bg: "#e8f1ff", color: "#1d5fc7" },
     "Indent Raised": { bg: "#fff4de", color: "#b5620f" }, "On Hold": { bg: "#f1f2f6", color: "#4a4d5c" },
     Picked: { bg: "#f3e8ff", color: "#8b3fd6" }, "Ready to Ship": { bg: "#e8f1ff", color: "#1d5fc7" },
+    "Partially Dispatched": { bg: "#fff4de", color: "#b5620f" },
     Dispatched: { bg: "#eafaf1", color: "#1a8a4c" }, Cancelled: { bg: "#f1f2f6", color: "#9295a8" },
   };
 

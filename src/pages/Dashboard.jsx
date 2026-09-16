@@ -80,13 +80,13 @@ export default function Dashboard() {
     const statusMap = {
       all: [],
       pending: ["Pending", "Indent Raised"],
-      inprocess: ["Confirmed", "Picked", "Ready to Ship"],
+      inprocess: ["Confirmed", "Picked", "Ready to Ship", "Partially Dispatched"],
       dispatched: ["Dispatched"],
     };
     const titles = {
       all: "All Orders",
       pending: "Pending Orders (Pending + Indent Raised)",
-      inprocess: "In Process Orders (Confirmed + Picked + Ready to Ship)",
+      inprocess: "In Process Orders (Confirmed + Picked + Ready to Ship + Partially Dispatched)",
       dispatched: "Dispatched Orders",
     };
     const statuses = statusMap[type];

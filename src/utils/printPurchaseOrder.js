@@ -68,7 +68,7 @@ export function printPurchaseOrder(po, items) {
         </div>
         <div class="meta-box">
           <h4>Order Details</h4>
-          <div>PO Date: ${fmt(po.created_at)}</div>
+          <div>PO Date: ${fmt(po.po_date || po.created_at)}</div>
           <div>Expected Delivery: ${fmt(po.expected_date)}</div>
           <div>Deliver To: ${po.delivery_location || "-"}</div>
           <div>Payment Terms: ${po.payment_terms || "-"}</div>

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Plus, Trash2, Loader2, CheckCircle2, PackagePlus } from "lucide-react";
+import { Plus, Trash2, Loader2, CheckCircle2, PackagePlus, List, Grid3x3, Printer } from "lucide-react";
 import ComboBox from "../components/ui/ComboBox";
 import AddMasterModal from "../components/ui/AddMasterModal";
+import GridOrderEntry, { flattenGrid } from "../components/ui/GridOrderEntry";
+import { printGridPreview } from "../utils/printGridPreview";
 import { useMasterData } from "../hooks/useMasterData";
 import { calculateItemWeight, sumItemTotals } from "../utils/weightCalculator";
 import { supabase } from "../lib/supabaseClient";
@@ -65,7 +67,18 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
   const [destination, setDestination] = useState("");
   const [remark, setRemark] = useState("");
   const [fileLink, setFileLink] = useState("");
+  const [billNo, setBillNo] = useState("");
+  const [transport, setTransport] = useState("");
+  const [clientOrderNo, setClientOrderNo] = useState("");
+  const [indentDate, setIndentDate] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [driverMobile, setDriverMobile] = useState("");
+  const [truckNo, setTruckNo] = useState("");
+  const [modeOfVehicle, setModeOfVehicle] = useState("");
   const [items, setItems] = useState([emptyRow()]);
+  const [entryMode, setEntryMode] = useState("list"); // "list" | "grid"
+  const [gridQty, setGridQty] = useState({});
+  const [gridVariants, setGridVariants] = useState({}); // { itemName: { shade, model } }
 
   const [addModal, setAddModal] = useState(null); // 'parties' | 'salesPersons' | 'brands' | 'destinations' | null
   const [saving, setSaving] = useState(false);
@@ -99,6 +112,14 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
       setOrderId(o.order_id);
       setOrderDate(o.order_date);
       setParty(o.party_name || "");
+      setBillNo(o.bill_no || "");
+      setTransport(o.transport || "");
+      setClientOrderNo(o.client_order_no || "");
+      setIndentDate(o.indent_date || "");
+      setDriverName(o.driver_name || "");
+      setDriverMobile(o.driver_mobile || "");
+      setTruckNo(o.truck_no || "");
+      setModeOfVehicle(o.mode_of_vehicle || "");
       setSalesPerson(o.sales_person || "");
       setBrand(o.brand || "");
       setDestination(o.destination || "");
@@ -121,6 +142,20 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
         return { ...row, na: calc.na, weightTon: calc.weightTon };
       });
       setItems(loadedItems.length > 0 ? loadedItems : [emptyRow()]);
+
+      const matrix = {};
+      const loadedVariants = {};
+      loadedItems.forEach((it) => {
+        if (!it.itemName || !it.thickness || !it.size) return;
+        matrix[it.itemName] = matrix[it.itemName] || {};
+        matrix[it.itemName][it.thickness] = matrix[it.itemName][it.thickness] || {};
+        matrix[it.itemName][it.thickness][it.size] = String(it.qty);
+        if (it.shade || it.model) {
+          loadedVariants[it.itemName] = { shade: it.shade || "", model: it.model || "" };
+        }
+      });
+      setGridQty(matrix);
+      setGridVariants(loadedVariants);
     } catch (err) {
       setStatus({ type: "error", message: "Could not load order: " + err.message });
     } finally {
@@ -136,7 +171,11 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
     }
   }, [editOrderId, loadExistingOrder, loadOrderId]);
 
-  const totals = useMemo(() => sumItemTotals(items), [items]);
+  const gridItems = useMemo(() => flattenGrid(gridQty, gridVariants), [gridQty, gridVariants]);
+  const totals = useMemo(
+    () => sumItemTotals(entryMode === "grid" ? gridItems : items),
+    [entryMode, gridItems, items]
+  );
 
   function recalcRow(row) {
     const result = calculateItemWeight({
@@ -204,6 +243,10 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
     if (!party.trim()) return "Party is required.";
     if (!brand.trim()) return "Brand is required.";
     if (!destination.trim()) return "Destination is required.";
+    if (entryMode === "grid") {
+      if (gridItems.length === 0) return "Fill at least one quantity in the grid.";
+      return null;
+    }
     const validItems = items.filter((r) => r.itemName.trim());
     if (validItems.length === 0) return "Add at least one item.";
     for (const row of validItems) {
@@ -223,8 +266,9 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
 
     setSaving(true);
     setStatus(null);
+    let editSnapshot = null;
     try {
-      const validItems = items.filter((r) => r.itemName.trim());
+      const validItems = entryMode === "grid" ? gridItems : items.filter((r) => r.itemName.trim());
       const orderPayload = {
         order_date: orderDate,
         party_name: party,
@@ -233,16 +277,33 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
         destination,
         file_link: fileLink || null,
         remark: remark || null,
+        bill_no: billNo || null,
+        transport: transport || null,
+        client_order_no: clientOrderNo || null,
+        indent_date: indentDate || null,
+        driver_name: driverName || null,
+        driver_mobile: driverMobile || null,
+        truck_no: truckNo || null,
+        mode_of_vehicle: modeOfVehicle || null,
         total_qty: totals.totalQty,
         total_weight: totals.totalWeight,
       };
 
       if (editOrderId) {
+        // capture the exact pre-edit state (fresh from DB, not from the loaded form)
+        // so the history is accurate even if the form was open a while
+        const [{ data: beforeOrder }, { data: beforeItems }] = await Promise.all([
+          supabase.from("orders").select("*").eq("order_id", editOrderId).single(),
+          supabase.from("order_items").select("*").eq("order_id", editOrderId),
+        ]);
+
         const { error: orderError } = await supabase.from("orders").update(orderPayload).eq("order_id", editOrderId);
         if (orderError) throw orderError;
 
         const { error: delErr } = await supabase.from("order_items").delete().eq("order_id", editOrderId);
         if (delErr) throw delErr;
+
+        editSnapshot = { beforeOrder, beforeItems };
       } else {
         const { error: orderError } = await supabase.from("orders").insert({
           order_id: orderId,
@@ -272,17 +333,41 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
       }
 
       if (editOrderId) {
+        // log the edit — before/after snapshot, non-blocking if it fails
+        try {
+          await supabase.from("order_edit_history").insert({
+            order_id: editOrderId,
+            edited_by: currentUser,
+            before_order: editSnapshot.beforeOrder,
+            before_items: editSnapshot.beforeItems,
+            after_order: { ...orderPayload, order_id: editOrderId },
+            after_items: itemRows,
+          });
+        } catch (histErr) {
+          // history logging failure should never block the actual save
+          console.error("Failed to log order edit history:", histErr);
+        }
+
         setStatus({ type: "success", message: `Order ${editOrderId} updated successfully!` });
         if (onExitEdit) setTimeout(() => onExitEdit(), 1100);
       } else {
         setStatus({ type: "success", message: `Order ${orderId} saved successfully!` });
         setParty("");
+        setBillNo("");
+        setTransport("");
+        setClientOrderNo("");
+        setIndentDate("");
+        setDriverName("");
+        setDriverMobile("");
+        setTruckNo("");
+        setModeOfVehicle("");
         setSalesPerson("");
         setBrand("");
         setDestination("");
         setRemark("");
         setFileLink("");
         setItems([emptyRow()]);
+        setGridQty({}); setGridVariants({});
         loadOrderId();
       }
     } catch (err) {
@@ -341,6 +426,12 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
           color: #b5620f; text-transform: uppercase; letter-spacing: 0.06em;
           border-bottom: 1px solid #f0f1f6; padding-bottom: 10px; margin-bottom: 16px;
         }
+
+        .co-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+        .co-mode-toggle { display: flex; gap: 6px; background: #f6f7fb; border-radius: 12px; padding: 5px; width: fit-content; }
+        .co-print-preview-btn { border: 1px solid #cfe0ff; background: #e8f1ff; color: #1d5fc7; border-radius: 10px; padding: 9px 16px; font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+        .co-mode-btn { border: none; background: transparent; color: #5b5f72; padding: 9px 16px; border-radius: 9px; font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 7px; }
+        .co-mode-btn.active { background: #14161f; color: #fff; }
 
         /* ---- item rows: table on desktop, stacked cards on mobile ---- */
         .co-items-head {
@@ -482,6 +573,46 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
               onAddNew={() => setAddModal("destinations")}
             />
 
+            <div className="co-text-field">
+              <label>Bill No.</label>
+              <input value={billNo} onChange={(e) => setBillNo(e.target.value)} placeholder="e.g. 155" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Order No. (Your Ref.)</label>
+              <input value={clientOrderNo} onChange={(e) => setClientOrderNo(e.target.value)} placeholder="e.g. MAY-31" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Indent Date</label>
+              <input type="date" value={indentDate} onChange={(e) => setIndentDate(e.target.value)} />
+            </div>
+
+            <div className="co-text-field">
+              <label>Transport</label>
+              <input value={transport} onChange={(e) => setTransport(e.target.value)} placeholder="Optional" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Truck No.</label>
+              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. AS-01LC-7356" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Mode of Vehicle</label>
+              <input value={modeOfVehicle} onChange={(e) => setModeOfVehicle(e.target.value)} placeholder="e.g. 06 Wheeler" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Driver Name</label>
+              <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Optional" />
+            </div>
+
+            <div className="co-text-field">
+              <label>Driver Mobile No.</label>
+              <input value={driverMobile} onChange={(e) => setDriverMobile(e.target.value)} placeholder="Optional" />
+            </div>
+
             <div className="co-text-field span-2">
               <label>Reference Link</label>
               <input value={fileLink} onChange={(e) => setFileLink(e.target.value)} placeholder="e.g., Google Drive link" />
@@ -494,12 +625,38 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
           </div>
 
           {/* ---- items ---- */}
+          <div className="co-mode-row">
+            <div className="co-mode-toggle">
+              <button className={`co-mode-btn ${entryMode === "list" ? "active" : ""}`} onClick={() => setEntryMode("list")}>
+                <List size={14} /> List Entry
+              </button>
+              <button className={`co-mode-btn ${entryMode === "grid" ? "active" : ""}`} onClick={() => setEntryMode("grid")}>
+                <Grid3x3 size={14} /> Grid Entry
+              </button>
+            </div>
+            {entryMode === "grid" && (
+              <button
+                className="co-print-preview-btn"
+                onClick={() => printGridPreview(
+                  { orderDate, party, brand, destination, remark, billNo, transport, clientOrderNo, indentDate, driverName, driverMobile, truckNo, modeOfVehicle },
+                  gridItems
+                )}
+              >
+                <Printer size={14} /> Print Preview (filled items only)
+              </button>
+            )}
+          </div>
+
           <div className="co-section-title">Order Items</div>
 
-          <div className="co-items-head">
-            <span>Item</span><span>Shade</span><span>Thk *</span><span>Size *</span>
-            <span>Qty</span><span>NA</span><span>Wt(Ton)</span><span></span>
-          </div>
+          {entryMode === "grid" ? (
+            <GridOrderEntry master={master} qtyMatrix={gridQty} setQtyMatrix={setGridQty} variants={gridVariants} setVariants={setGridVariants} />
+          ) : (
+            <>
+              <div className="co-items-head">
+                <span>Item</span><span>Shade</span><span>Thk *</span><span>Size *</span>
+                <span>Qty</span><span>NA</span><span>Wt(Ton)</span><span></span>
+              </div>
 
           {items.map((row) => {
             const membraneFamily = isMembraneFamily(row.itemName);
@@ -596,6 +753,8 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
           <button className="co-add-item-btn" onClick={addItemRow}>
             <Plus size={15} strokeWidth={2.6} /> Add Item
           </button>
+            </>
+          )}
 
           {/* ---- totals ---- */}
           <div className="co-totals">
@@ -626,7 +785,7 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
                 Cancel
               </button>
             ) : (
-              <button className="co-btn-secondary" onClick={() => { setItems([emptyRow()]); setStatus(null); }}>
+              <button className="co-btn-secondary" onClick={() => { setItems([emptyRow()]); setGridQty({}); setGridVariants({}); setStatus(null); }}>
                 Reset
               </button>
             )}
