@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Factory, Loader2, Plus, Trash2, Pencil, Check, X, LayoutDashboard,
-  ClipboardList, Table2, Settings2, AlertTriangle, BarChart3, TrendingUp,
+  ClipboardList, Table2, Settings2, AlertTriangle, BarChart3, TrendingUp, Flame,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -429,6 +429,30 @@ function CheckIcon() {
 }
 
 /* ============================== DAILY ENTRY ============================== */
+// row (parameter) definitions for the Hot Press grid — matches the paper "Daily Hot Press Production Report" form
+const HOT_PRESS_PARAMS = [
+  { key: "size", label: "Size", type: "text", placeholder: "e.g. 8x4" },
+  { key: "thickness", label: "Thick", type: "text", placeholder: "e.g. 12mm" },
+  { key: "pos", label: "Pos", type: "number" },
+  { key: "ply_line", label: "No. of Ply Line", type: "number" },
+  { key: "glue_line", label: "Glue Line", type: "number" },
+  { key: "core_line", label: "Core Line", type: "number" },
+  { key: "long_press_line", label: "Long Press Line", type: "number" },
+  { key: "short_panel_line", label: "Short Panel Line", type: "number" },
+  { key: "face", label: "Face", type: "number" },
+  { key: "u_tion", label: "U/Tion", type: "number" },
+  { key: "pressure", label: "Pressure", type: "number" },
+  { key: "temp", label: "Temp", type: "number" },
+];
+function isHotPressStage(stage) {
+  return (stage || "").trim().toLowerCase().includes("hot press");
+}
+function emptyHotPressLoad(loadNo) {
+  const row = { loadNo, extra: {} };
+  HOT_PRESS_PARAMS.forEach((p) => { row[p.key] = ""; });
+  return row;
+}
+
 function EntryTab({ targets, stages, currentUser, onSaved }) {
   const master = useMasterData();
   const [entryDate, setEntryDate] = useState(todayStr());
@@ -441,7 +465,56 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const [hpLoads, setHpLoads] = useState([emptyHotPressLoad(1)]);
+  const [extraParams, setExtraParams] = useState([]); // admin-manageable extra columns beyond the fixed set
+  const [showParamManager, setShowParamManager] = useState(false);
+  const [newParamLabel, setNewParamLabel] = useState("");
+  const [newParamType, setNewParamType] = useState("number");
+  const [savingParam, setSavingParam] = useState(false);
+
+  const [viewDate, setViewDate] = useState(todayStr());
+  const [savedLoads, setSavedLoads] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+
+  const loadExtraParams = useCallback(async () => {
+    const { data } = await supabase.from("hot_press_params").select("*").order("sequence");
+    setExtraParams(data || []);
+  }, []);
+  useEffect(() => { loadExtraParams(); }, [loadExtraParams]);
+
+  const loadSavedForDate = useCallback(async (date) => {
+    setLoadingSaved(true);
+    const { data } = await supabase.from("hot_press_logs").select("*").eq("log_date", date).order("shift").order("load_no");
+    setSavedLoads(data || []);
+    setLoadingSaved(false);
+  }, []);
+  useEffect(() => { loadSavedForDate(viewDate); }, [viewDate, loadSavedForDate]);
+
+  async function addExtraParam() {
+    if (!newParamLabel.trim()) return;
+    setSavingParam(true);
+    try {
+      const key = newParamLabel.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      const { error: err } = await supabase.from("hot_press_params").insert({
+        param_key: key, label: newParamLabel.trim(), input_type: newParamType, sequence: extraParams.length + 1,
+      });
+      if (err && err.code !== "23505") throw err;
+      setNewParamLabel("");
+      loadExtraParams();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingParam(false);
+    }
+  }
+  async function removeExtraParam(id) {
+    if (!confirm("Remove this extra parameter? (Doesn't delete already-saved data, just hides the column going forward.)")) return;
+    await supabase.from("hot_press_params").delete().eq("id", id);
+    loadExtraParams();
+  }
+
   const department = departmentForItem(product);
+  const hotPressMode = isHotPressStage(stage);
 
   // full canonical stage list for the resolved department — not limited to stages that already have a target
   const stageOptions = useMemo(
@@ -455,14 +528,102 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
     setStage("");
   }
 
+  function updateHpCell(loadNo, key, value) {
+    setHpLoads((prev) => prev.map((l) => (l.loadNo === loadNo ? { ...l, [key]: value } : l)));
+  }
+  function updateHpExtra(loadNo, paramKey, value) {
+    setHpLoads((prev) => prev.map((l) => (l.loadNo === loadNo ? { ...l, extra: { ...l.extra, [paramKey]: value } } : l)));
+  }
+  function addHpLoad() {
+    setHpLoads((prev) => [...prev, emptyHotPressLoad(prev.length > 0 ? Math.max(...prev.map((l) => l.loadNo)) + 1 : 1)]);
+  }
+  function addHpLoads(count) {
+    setHpLoads((prev) => {
+      const startNo = prev.length > 0 ? Math.max(...prev.map((l) => l.loadNo)) + 1 : 1;
+      return [...prev, ...Array.from({ length: count }, (_, i) => emptyHotPressLoad(startNo + i))];
+    });
+  }
+  function removeHpLoad(loadNo) {
+    setHpLoads((prev) => (prev.length > 1 ? prev.filter((l) => l.loadNo !== loadNo) : prev));
+  }
+  function hpHasValue(load) {
+    const fixedHasValue = HOT_PRESS_PARAMS.some((p) => String(load[p.key] ?? "").trim() !== "");
+    const extraHasValue = Object.values(load.extra || {}).some((v) => String(v ?? "").trim() !== "");
+    return fixedHasValue || extraHasValue;
+  }
+
   async function submit(e) {
     e.preventDefault();
-    if (!product || !stage || actual === "") {
-      setError("Product, Stage and Actual Production are required.");
+    if (!product || !stage) {
+      setError("Product and Stage are required.");
       return;
     }
     if (!department) {
       setError(`"${product}" isn't mapped to a department yet — check with admin.`);
+      return;
+    }
+
+    if (hotPressMode) {
+      const filled = hpLoads.filter(hpHasValue);
+      if (filled.length === 0) {
+        setError("Fill at least one load column in the Hot Press grid.");
+        return;
+      }
+      setSaving(true);
+      setError("");
+      try {
+        const rows = filled.map((l) => ({
+          log_date: entryDate,
+          shift,
+          load_no: l.loadNo,
+          size: l.size || null,
+          thickness: l.thickness || null,
+          pos: l.pos === "" ? null : parseFloat(l.pos),
+          ply_line: l.ply_line === "" ? null : parseFloat(l.ply_line),
+          glue_line: l.glue_line === "" ? null : parseFloat(l.glue_line),
+          core_line: l.core_line === "" ? null : parseFloat(l.core_line),
+          long_press_line: l.long_press_line === "" ? null : parseFloat(l.long_press_line),
+          short_panel_line: l.short_panel_line === "" ? null : parseFloat(l.short_panel_line),
+          face: l.face === "" ? null : parseFloat(l.face),
+          u_tion: l.u_tion === "" ? null : parseFloat(l.u_tion),
+          pressure: l.pressure === "" ? null : parseFloat(l.pressure),
+          temp: l.temp === "" ? null : parseFloat(l.temp),
+          remarks: remarks.trim() || null,
+          extra_values: l.extra || {},
+          created_by: currentUser,
+        }));
+        const { error: hpErr } = await supabase.from("hot_press_logs").insert(rows);
+        if (hpErr) throw hpErr;
+
+        // production_log's actual qty is auto-derived from the grid — sum of "Pos" across
+        // every filled load (falls back to a simple load count if Pos was left blank)
+        const posSum = filled.reduce((s, l) => s + (l.pos !== "" ? parseFloat(l.pos) || 0 : 0), 0);
+        const computedActual = posSum > 0 ? posSum : filled.length;
+
+        const { error: plErr } = await supabase.from("production_log").insert({
+          entry_date: entryDate, shift, department, product, stage,
+          actual_qty: computedActual,
+          rejection_qty: parseFloat(rejection) || 0,
+          remarks: remarks.trim(),
+          created_by: currentUser,
+        });
+        if (plErr) throw plErr;
+
+        setHpLoads([emptyHotPressLoad(1)]);
+        setRejection(""); setRemarks("");
+        setViewDate(entryDate);
+        loadSavedForDate(entryDate);
+        onSaved();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    if (actual === "") {
+      setError("Actual Production Qty is required.");
       return;
     }
     setSaving(true);
@@ -484,7 +645,8 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
   }
 
   return (
-    <form className="ent-form" onSubmit={submit}>
+    <>
+    <form className="ent-form" onSubmit={submit} style={hotPressMode ? { maxWidth: "none" } : undefined}>
       <style>{`
         .ent-form { background: #fff; border: 1px solid #eceef4; border-radius: 16px; padding: 22px; max-width: 720px; }
         .ent-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 14px; }
@@ -497,6 +659,42 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
         .ent-submit:disabled { opacity: 0.6; cursor: not-allowed; }
         .ent-error { background: #fdeceb; color: #c23c33; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 12.5px; font-weight: 600; }
         .ent-dept-tag { font-size: 10.5px; font-weight: 700; color: #1d5fc7; background: #e8f1ff; padding: 3px 9px; border-radius: 20px; margin-left: 8px; }
+
+        .hp-banner { background: #fff4de; border: 1px dashed #e1c78f; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 12.5px; color: #b5620f; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .hp-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+        .hp-add-btn { border: 1px dashed #cfe0ff; background: #f5f9ff; color: #1d5fc7; border-radius: 9px; padding: 8px 13px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .hp-table-wrap { border: 1px solid #eceef4; border-radius: 14px; overflow: auto; margin-bottom: 16px; }
+        .hp-table { border-collapse: collapse; font-size: 12px; width: 100%; min-width: 900px; }
+        .hp-table th, .hp-table td { border: 1px solid #eceef4; padding: 6px 8px; text-align: center; white-space: nowrap; }
+        .hp-table thead th { background: #14161f; color: #fff; font-size: 10.5px; text-transform: uppercase; font-weight: 700; position: sticky; top: 0; z-index: 2; }
+        .hp-table thead th:first-child { position: sticky; left: 0; z-index: 3; background: #14161f; }
+        .hp-param-cell { background: #f6f7fb; font-weight: 700; text-align: left; position: sticky; left: 0; z-index: 1; min-width: 140px; }
+        .hp-cell-input { width: 66px; border: 1px solid #e1e3ec !important; border-radius: 6px; padding: 5px 4px !important; text-align: center; font-size: 11.5px; }
+        .hp-cell-input.text { width: 84px; }
+        .hp-del-load { border: none; background: #fdeceb; color: #c23c33; width: 22px; height: 22px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+
+        .hp-param-manager { background: #f5f9ff; border: 1.5px dashed #cfe0ff; border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+        .hp-param-manager-title { font-size: 12px; color: #5b5f72; font-weight: 600; margin-bottom: 10px; }
+        .hp-param-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .hp-param-chip { background: #fff; border: 1px solid #cfe0ff; border-radius: 20px; padding: 5px 6px 5px 12px; font-size: 12px; font-weight: 600; color: #1d5fc7; display: inline-flex; align-items: center; gap: 6px; }
+        .hp-param-chip button { border: none; background: #e8f1ff; color: #1d5fc7; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+        .hp-param-add-row { display: flex; gap: 8px; }
+        .hp-param-add-row input { flex: 1; border: 1px solid #e1e3ec; border-radius: 9px; padding: 8px 11px; font-size: 12.5px; }
+        .hp-param-add-row select { border: 1px solid #e1e3ec; border-radius: 9px; padding: 8px 11px; font-size: 12.5px; }
+        .hp-param-add-row button { border: none; background: #14161f; color: #fff; border-radius: 9px; padding: 8px 14px; font-weight: 700; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+        .hp-extra-tag { font-size: 9px; background: #e8f1ff; color: #1d5fc7; padding: 1px 6px; border-radius: 10px; font-weight: 700; margin-left: 4px; }
+
+        .hp-saved-section { max-width: none; margin-top: 22px; }
+        .hp-saved-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14.5px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .hp-saved-date { border: 1px solid #e1e3ec; border-radius: 9px; padding: 7px 10px; font-size: 12.5px; margin-left: 4px; }
+        .hp-saved-hint { font-size: 11.5px; color: #9295a8; font-weight: 400; }
+        .hp-saved-card { background: #fff; border: 1px solid #eceef4; border-radius: 14px; overflow: auto; }
+        .hp-saved-table { border-collapse: collapse; font-size: 11.5px; width: 100%; min-width: 1100px; }
+        .hp-saved-table th { background: #f6f7fb; padding: 8px; font-size: 10px; text-transform: uppercase; color: #5b5f72; font-weight: 700; white-space: nowrap; }
+        .hp-saved-table td { padding: 7px 8px; border-top: 1px solid #f0f1f6; text-align: center; white-space: nowrap; }
+        .hp-saved-empty { text-align: center; color: #b7b9c6; padding: 30px 0; }
+        .hp-spin { animation: hp-spin-anim 0.9s linear infinite; }
+        @keyframes hp-spin-anim { to { transform: rotate(360deg); } }
       `}</style>
 
       {error && <div className="ent-error">{error}</div>}
@@ -518,10 +716,96 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
           <label>Stage / Process</label>
           <ComboBox value={stage} onChange={setStage} options={stageOptions} placeholder={product ? "Select stage" : "Select product first"} />
         </div>
-        <div className="ent-field"><label>Actual Production Qty</label><input type="number" value={actual} onChange={(e) => setActual(e.target.value)} placeholder="0" /></div>
+        {!hotPressMode && (
+          <div className="ent-field"><label>Actual Production Qty</label><input type="number" value={actual} onChange={(e) => setActual(e.target.value)} placeholder="0" /></div>
+        )}
         <div className="ent-field"><label>Rejection Qty (optional)</label><input type="number" value={rejection} onChange={(e) => setRejection(e.target.value)} placeholder="0" /></div>
         <div className="ent-field" style={{ gridColumn: "span 2" }}><label>Remarks (optional)</label><input value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="e.g. machine downtime" /></div>
       </div>
+
+      {hotPressMode && (
+        <>
+          <div className="hp-banner">
+            <Flame size={14} /> Hot Press stage selected — fill the load-wise grid below (matches your paper "Daily Hot Press Production Report"). Actual Qty is auto-calculated from the "Pos" column, so it's hidden above.
+          </div>
+          <div className="hp-toolbar">
+            <button type="button" className="hp-add-btn" onClick={() => addHpLoads(10)}><Plus size={12} /> Add 10 Loads</button>
+            <button type="button" className="hp-add-btn" onClick={addHpLoad}><Plus size={12} /> Add 1 Load</button>
+            <button type="button" className="hp-add-btn" onClick={() => setShowParamManager((s) => !s)}><Settings2 size={12} /> {showParamManager ? "Hide" : "Manage"} Extra Parameters</button>
+          </div>
+
+          {showParamManager && (
+            <div className="hp-param-manager">
+              <div className="hp-param-manager-title">Extra parameters (beyond the fixed ones) — add or remove anytime, no code changes needed.</div>
+              <div className="hp-param-list">
+                {extraParams.length === 0 && <span style={{ color: "#9295a8", fontSize: 12 }}>No extra parameters yet.</span>}
+                {extraParams.map((p) => (
+                  <span className="hp-param-chip" key={p.id}>
+                    {p.label} <button type="button" onClick={() => removeExtraParam(p.id)}><X size={11} /></button>
+                  </span>
+                ))}
+              </div>
+              <div className="hp-param-add-row">
+                <input value={newParamLabel} onChange={(e) => setNewParamLabel(e.target.value)} placeholder="e.g. Core Line (2nd reading)" />
+                <select value={newParamType} onChange={(e) => setNewParamType(e.target.value)}>
+                  <option value="number">Number</option>
+                  <option value="text">Text</option>
+                </select>
+                <button type="button" onClick={addExtraParam} disabled={savingParam}><Plus size={12} /> Add</button>
+              </div>
+            </div>
+          )}
+          <div className="hp-table-wrap">
+            <table className="hp-table">
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  {hpLoads.map((l) => (
+                    <th key={l.loadNo}>
+                      #{l.loadNo}
+                      {hpLoads.length > 1 && <button type="button" className="hp-del-load" style={{ marginLeft: 6 }} onClick={() => removeHpLoad(l.loadNo)}><Trash2 size={11} /></button>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {HOT_PRESS_PARAMS.map((p) => (
+                  <tr key={p.key}>
+                    <td className="hp-param-cell">{p.label}</td>
+                    {hpLoads.map((l) => (
+                      <td key={l.loadNo}>
+                        <input
+                          type={p.type === "number" ? "number" : "text"}
+                          className={`hp-cell-input ${p.type === "text" ? "text" : ""}`}
+                          value={l[p.key]}
+                          onChange={(e) => updateHpCell(l.loadNo, p.key, e.target.value)}
+                          placeholder={p.placeholder || "0"}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {extraParams.map((p) => (
+                  <tr key={p.id}>
+                    <td className="hp-param-cell">{p.label} <span className="hp-extra-tag">extra</span></td>
+                    {hpLoads.map((l) => (
+                      <td key={l.loadNo}>
+                        <input
+                          type={p.input_type === "number" ? "number" : "text"}
+                          className={`hp-cell-input ${p.input_type === "text" ? "text" : ""}`}
+                          value={l.extra?.[p.param_key] ?? ""}
+                          onChange={(e) => updateHpExtra(l.loadNo, p.param_key, e.target.value)}
+                          placeholder="0"
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {matchedTarget && (
         <div className="ent-fetch-box">
@@ -540,6 +824,48 @@ function EntryTab({ targets, stages, currentUser, onSaved }) {
         <Plus size={15} /> {saving ? "Saving..." : "Submit Entry"}
       </button>
     </form>
+
+    {hotPressMode && (
+      <div className="hp-saved-section">
+        <div className="hp-saved-title">
+          <Flame size={15} /> Saved Hot Press Loads
+          <input type="date" className="hp-saved-date" value={viewDate} onChange={(e) => setViewDate(e.target.value)} />
+          <span className="hp-saved-hint">— this same data also appears in "Production Sheet" as one summarized row per date/shift.</span>
+        </div>
+        <div className="hp-saved-card">
+          {loadingSaved ? (
+            <div className="hp-saved-empty"><Loader2 size={18} className="hp-spin" /></div>
+          ) : savedLoads.length === 0 ? (
+            <div className="hp-saved-empty">No Hot Press loads logged for this date yet.</div>
+          ) : (
+            <table className="hp-saved-table">
+              <thead>
+                <tr>
+                  <th>Shift</th><th>Load #</th><th>Size</th><th>Thick</th><th>Pos</th>
+                  <th>Ply Line</th><th>Glue Line</th><th>Core Line</th><th>Long Press</th><th>Short Panel</th>
+                  <th>Face</th><th>U/Tion</th><th>Pressure</th><th>Temp</th>
+                  {extraParams.map((p) => <th key={p.id}>{p.label}</th>)}
+                  <th>Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {savedLoads.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.shift}</td><td>{r.load_no}</td><td>{r.size || "-"}</td><td>{r.thickness || "-"}</td>
+                    <td>{r.pos ?? "-"}</td><td>{r.ply_line ?? "-"}</td><td>{r.glue_line ?? "-"}</td>
+                    <td>{r.core_line ?? "-"}</td><td>{r.long_press_line ?? "-"}</td><td>{r.short_panel_line ?? "-"}</td>
+                    <td>{r.face ?? "-"}</td><td>{r.u_tion ?? "-"}</td><td>{r.pressure ?? "-"}</td><td>{r.temp ?? "-"}</td>
+                    {extraParams.map((p) => <td key={p.id}>{r.extra_values?.[p.param_key] ?? "-"}</td>)}
+                    <td>{r.remarks || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -551,6 +877,38 @@ function ReportTab({ joinedRows }) {
   const [filterProduct, setFilterProduct] = useState("");
   const [filterStage, setFilterStage] = useState("");
   const [filterShift, setFilterShift] = useState("");
+  const [viewMode, setViewMode] = useState("summary"); // "summary" | "hotpress"
+
+  const [hpRows, setHpRows] = useState([]);
+  const [hpParams, setHpParams] = useState([]);
+  const [hpLoading, setHpLoading] = useState(false);
+
+  useEffect(() => {
+    if (viewMode !== "hotpress") return;
+    let cancelled = false;
+    async function loadHp() {
+      setHpLoading(true);
+      const [logsRes, paramsRes] = await Promise.all([
+        supabase.from("hot_press_logs").select("*").order("log_date", { ascending: false }).order("shift").order("load_no"),
+        supabase.from("hot_press_params").select("*").order("sequence"),
+      ]);
+      if (cancelled) return;
+      setHpRows(logsRes.data || []);
+      setHpParams(paramsRes.data || []);
+      setHpLoading(false);
+    }
+    loadHp();
+    return () => { cancelled = true; };
+  }, [viewMode]);
+
+  const filteredHp = useMemo(() => {
+    return hpRows.filter((r) => {
+      if (filterDate && r.log_date !== filterDate) return false;
+      if (filterMonth && !r.log_date.startsWith(filterMonth)) return false;
+      if (filterShift && r.shift !== filterShift) return false;
+      return true;
+    });
+  }, [hpRows, filterDate, filterMonth, filterShift]);
 
   const products = useMemo(() => [...new Set(joinedRows.map((r) => r.product))], [joinedRows]);
   const stages = useMemo(() => [...new Set(joinedRows.map((r) => r.stage))], [joinedRows]);
@@ -571,6 +929,9 @@ function ReportTab({ joinedRows }) {
     <div>
       <style>{`
         .rpt-filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; background: #fff; border: 1px solid #eceef4; border-radius: 14px; padding: 12px; }
+        .rpt-tabs { display: flex; gap: 6px; background: #f6f7fb; border-radius: 12px; padding: 5px; margin-bottom: 14px; width: fit-content; }
+        .rpt-tab-btn { border: none; background: transparent; color: #5b5f72; padding: 9px 18px; border-radius: 9px; font-weight: 700; font-size: 12.5px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .rpt-tab-btn.active { background: #14161f; color: #fff; }
         .rpt-filters input, .rpt-filters select { border: 1px solid #e1e3ec; border-radius: 9px; padding: 8px 10px; font-size: 12.5px; }
         .rpt-count { font-size: 12px; color: #9295a8; margin-bottom: 10px; }
         .rpt-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: auto; }
@@ -582,56 +943,96 @@ function ReportTab({ joinedRows }) {
         .rpt-empty { text-align: center; color: #b7b9c6; padding: 30px; }
       `}</style>
 
+      <div className="rpt-tabs">
+        <button className={`rpt-tab-btn ${viewMode === "summary" ? "active" : ""}`} onClick={() => setViewMode("summary")}>Summary</button>
+        <button className={`rpt-tab-btn ${viewMode === "hotpress" ? "active" : ""}`} onClick={() => setViewMode("hotpress")}><Flame size={13} /> Hot Press Detail</button>
+      </div>
+
       <div className="rpt-filters">
         <input type="date" value={filterDate} onChange={(e) => { setFilterDate(e.target.value); setFilterMonth(""); }} placeholder="Date" />
         <input type="month" value={filterMonth} onChange={(e) => { setFilterMonth(e.target.value); setFilterDate(""); }} placeholder="Month" />
-        <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
-          <option value="">All Departments</option>
-          {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-        </select>
-        <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
-          <option value="">All Products</option>
-          {products.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <select value={filterStage} onChange={(e) => setFilterStage(e.target.value)}>
-          <option value="">All Stages</option>
-          {stages.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        {viewMode === "summary" && (
+          <>
+            <select value={filterDept} onChange={(e) => setFilterDept(e.target.value)}>
+              <option value="">All Departments</option>
+              {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
+              <option value="">All Products</option>
+              {products.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <select value={filterStage} onChange={(e) => setFilterStage(e.target.value)}>
+              <option value="">All Stages</option>
+              {stages.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </>
+        )}
         <select value={filterShift} onChange={(e) => setFilterShift(e.target.value)}>
           <option value="">All Shifts</option>
           {SHIFTS.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
 
-      <div className="rpt-count">{filtered.length} record(s)</div>
+      <div className="rpt-count">{viewMode === "summary" ? filtered.length : filteredHp.length} record(s)</div>
 
       <div className="rpt-card">
-        {filtered.length === 0 ? (
-          <div className="rpt-empty">No production records match this filter.</div>
+        {viewMode === "summary" ? (
+          filtered.length === 0 ? (
+            <div className="rpt-empty">No production records match this filter.</div>
+          ) : (
+            <table className="rpt-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Shift</th><th>Department</th><th>Product</th><th>Stage</th>
+                  <th>8Hr Capacity</th><th>Target</th><th>Actual</th><th>Balance</th><th>Achievement %</th><th>Rejection</th><th>Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r) => (
+                  <tr key={r.id}>
+                    <td>{fmtDate(r.entry_date)}</td>
+                    <td>{r.shift ? r.shift.split(" ")[0] + " " + r.shift.split(" ")[1] : "-"}</td>
+                    <td>{r.department}</td>
+                    <td>{r.product}</td>
+                    <td>{r.stage}</td>
+                    <td>{r.capacity} {r.unit}</td>
+                    <td>{r.target} {r.unit}</td>
+                    <td>{r.actual_qty} {r.unit}</td>
+                    <td className={r.balance < 0 ? "rpt-achievement-low" : "rpt-achievement-ok"}>{r.balance > 0 ? `+${r.balance}` : r.balance}</td>
+                    <td className={r.achievement !== null && r.achievement < 90 ? "rpt-achievement-low" : "rpt-achievement-ok"}>
+                      {r.achievement === null ? "-" : `${r.achievement.toFixed(1)}%`}
+                    </td>
+                    <td>{r.rejection_qty}</td>
+                    <td>{r.remarks || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : hpLoading ? (
+          <div className="rpt-empty"><Loader2 size={20} className="hp-spin" /></div>
+        ) : filteredHp.length === 0 ? (
+          <div className="rpt-empty">No Hot Press loads match this filter.</div>
         ) : (
           <table className="rpt-table">
             <thead>
               <tr>
-                <th>Date</th><th>Shift</th><th>Department</th><th>Product</th><th>Stage</th>
-                <th>8Hr Capacity</th><th>Target</th><th>Actual</th><th>Balance</th><th>Achievement %</th><th>Rejection</th><th>Remarks</th>
+                <th>Date</th><th>Shift</th><th>Load #</th><th>Size</th><th>Thick</th><th>Pos</th>
+                <th>Ply Line</th><th>Glue Line</th><th>Core Line</th><th>Long Press</th><th>Short Panel</th>
+                <th>Face</th><th>U/Tion</th><th>Pressure</th><th>Temp</th>
+                {hpParams.map((p) => <th key={p.id}>{p.label}</th>)}
+                <th>Remarks</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r) => (
+              {filteredHp.map((r) => (
                 <tr key={r.id}>
-                  <td>{fmtDate(r.entry_date)}</td>
-                  <td>{r.shift ? r.shift.split(" ")[0] + " " + r.shift.split(" ")[1] : "-"}</td>
-                  <td>{r.department}</td>
-                  <td>{r.product}</td>
-                  <td>{r.stage}</td>
-                  <td>{r.capacity} {r.unit}</td>
-                  <td>{r.target} {r.unit}</td>
-                  <td>{r.actual_qty} {r.unit}</td>
-                  <td className={r.balance < 0 ? "rpt-achievement-low" : "rpt-achievement-ok"}>{r.balance > 0 ? `+${r.balance}` : r.balance}</td>
-                  <td className={r.achievement !== null && r.achievement < 90 ? "rpt-achievement-low" : "rpt-achievement-ok"}>
-                    {r.achievement === null ? "-" : `${r.achievement.toFixed(1)}%`}
-                  </td>
-                  <td>{r.rejection_qty}</td>
+                  <td>{fmtDate(r.log_date)}</td><td>{r.shift || "-"}</td><td>{r.load_no}</td>
+                  <td>{r.size || "-"}</td><td>{r.thickness || "-"}</td><td>{r.pos ?? "-"}</td>
+                  <td>{r.ply_line ?? "-"}</td><td>{r.glue_line ?? "-"}</td><td>{r.core_line ?? "-"}</td>
+                  <td>{r.long_press_line ?? "-"}</td><td>{r.short_panel_line ?? "-"}</td>
+                  <td>{r.face ?? "-"}</td><td>{r.u_tion ?? "-"}</td><td>{r.pressure ?? "-"}</td><td>{r.temp ?? "-"}</td>
+                  {hpParams.map((p) => <td key={p.id}>{r.extra_values?.[p.param_key] ?? "-"}</td>)}
                   <td>{r.remarks || "-"}</td>
                 </tr>
               ))}

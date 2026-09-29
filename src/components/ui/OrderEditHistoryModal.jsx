@@ -3,8 +3,9 @@ import { X, History as HistoryIcon, Loader2 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
 const FIELD_LABELS = {
-  order_date: "Order Date", party_name: "Party", address: "Address", sales_person: "Sales Person",
+  order_date: "Order Date", party_name: "Party", sales_person: "Sales Person",
   brand: "Brand", destination: "Destination", remark: "Remark",
+  bill_no: "Bill No", client_order_no: "Indent No (Your Ref.)", indent_date: "Indent Date",
   total_qty: "Total Qty", total_weight: "Total Weight", file_link: "Reference Link",
 };
 

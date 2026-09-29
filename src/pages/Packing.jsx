@@ -203,7 +203,9 @@ export default function Packing() {
               <thead>
                 <tr>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
-                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Action</th>
+                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th>
+                  <th>Bill No</th><th>Indent No</th><th>Indent Date</th>
+                  <th>Status</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,6 +221,9 @@ export default function Packing() {
                       <td data-label="Sales">{o.sales_person || <span className="pc-empty-cell">-</span>}</td>
                       <td data-label="Qty">{o.total_qty}</td>
                       <td data-label="Wt(Ton)">{Number(o.total_weight).toFixed(3)}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="pc-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="pc-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="pc-empty-cell">-</span>}</td>
                       <td data-label="Status">
                         <span className="pc-badge" style={{ background: badgeStyle.bg, color: badgeStyle.color }}>{o.status}</span>
                       </td>

@@ -108,6 +108,9 @@ export default function BulkOrderUpload({ currentUser }) {
                   brand: String(row["Brand"] ?? "").trim(),
                   destination: String(row["Destination"] ?? "").trim(),
                   remark: String(row["Remark"] ?? "").trim(),
+                  billNo: String(row["Bill No"] ?? "").trim(),
+                  clientOrderNo: String(row["Indent No"] ?? "").trim(),
+                  indentDate: row["Indent Date"] ? excelDateToISO(row["Indent Date"]) : null,
                 },
                 items: [],
                 errors: [],
@@ -190,6 +193,9 @@ export default function BulkOrderUpload({ currentUser }) {
             brand: g.meta.brand,
             destination: g.meta.destination,
             remark: g.meta.remark || null,
+            bill_no: g.meta.billNo || null,
+            client_order_no: g.meta.clientOrderNo || null,
+            indent_date: g.meta.indentDate || null,
             total_qty: totals.totalQty,
             total_weight: totals.totalWeight,
             status: "Pending",
@@ -229,11 +235,21 @@ export default function BulkOrderUpload({ currentUser }) {
   }
 
   function downloadTemplate() {
-    const headers = ["Order Ref", "Order Date", "Party", "Sales Person", "Brand", "Destination", "Remark", "Item Name", "Size", "Thickness", "Qty", "Shade", "Model"];
+    const headers = [
+      "Order Ref", "Order Date", "Party", "Sales Person", "Brand", "Destination", "Remark",
+      "Bill No", "Indent No", "Indent Date",
+      "Item Name", "Size", "Thickness", "Qty", "Shade", "Model",
+    ];
     const example = [
-      ["B1", "10-08-2026", "ADITYA GLASS", "ABHAY KUMAR", "BEST PINE", "AYODHA", "", "PLYWOOD", "8x4", "12MM", 10, "", ""],
-      ["B1", "10-08-2026", "ADITYA GLASS", "ABHAY KUMAR", "BEST PINE", "AYODHA", "", "BLOCKBOARD", "8x4", "19MM", 5, "", ""],
-      ["B2", "10-08-2026", "AMBICA PLYWOOD", "ROHIT SHARMA", "BULAND PLY / MARS CLUB", "GUWAHATI", "", "MEMBRANE DOOR", "80 X 40", "19MM", 3, "", "EMD-51"],
+      ["B1", "10-08-2026", "ADITYA GLASS", "ABHAY KUMAR", "BEST PINE", "AYODHA", "",
+       "155", "MAY-31", "09-05-2026",
+       "PLYWOOD", "8x4", "12MM", 10, "", ""],
+      ["B1", "10-08-2026", "ADITYA GLASS", "ABHAY KUMAR", "BEST PINE", "AYODHA", "",
+       "155", "MAY-31", "09-05-2026",
+       "BLOCKBOARD", "8x4", "19MM", 5, "", ""],
+      ["B2", "10-08-2026", "AMBICA PLYWOOD", "ROHIT SHARMA", "BULAND PLY / MARS CLUB", "GUWAHATI", "",
+       "", "", "",
+       "MEMBRANE DOOR", "80 X 40", "19MM", 3, "", "EMD-51"],
     ];
     const ws = XLSX.utils.aoa_to_sheet([headers, ...example]);
     ws["!cols"] = headers.map(() => ({ wch: 16 }));
@@ -317,6 +333,7 @@ export default function BulkOrderUpload({ currentUser }) {
                 <span className="bou-group-ref">{g.ref}</span>
                 <span className="bou-group-meta">
                   <b>{g.meta.party || "—"}</b> · {g.meta.brand || "—"} · {g.meta.destination || "—"} · {g.meta.orderDate}
+                  {g.meta.billNo && <> · Bill #{g.meta.billNo}</>}
                 </span>
                 <button className="bou-del-btn" onClick={() => removeGroup(g.ref)} title="Remove this order"><Trash2 size={13} /></button>
               </div>

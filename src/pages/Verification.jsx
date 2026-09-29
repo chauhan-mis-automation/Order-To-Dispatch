@@ -42,6 +42,7 @@ export default function Verification({ currentUser, onEditOrder }) {
   const [apprFromDate, setApprFromDate] = useState("");
   const [apprToDate, setApprToDate] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [printingDetailed, setPrintingDetailed] = useState(false);
 
   const [openMenuId, setOpenMenuId] = useState(null);
   const [viewOrderId, setViewOrderId] = useState(null);
@@ -153,6 +154,102 @@ export default function Verification({ currentUser, onEditOrder }) {
     win.document.close();
   }
 
+  async function printSelectedDetailed() {
+    const toPrint = selectedIds.size > 0 ? filtered.filter((o) => selectedIds.has(o.order_id)) : filtered;
+    if (toPrint.length === 0) {
+      alert("No records to print.");
+      return;
+    }
+    setPrintingDetailed(true);
+    try {
+      const orderIds = toPrint.map((o) => o.order_id);
+      const { data: allItems } = await supabase.from("order_items").select("*").in("order_id", orderIds);
+      const itemsByOrder = {};
+      (allItems || []).forEach((it) => {
+        itemsByOrder[it.order_id] = itemsByOrder[it.order_id] || [];
+        itemsByOrder[it.order_id].push(it);
+      });
+
+      const title = viewMode === "approved" ? "Approved Orders — Full Details" : "Verification / Hold List — Full Details";
+      const field = (label, value) => (value ? `<div><strong>${label}:</strong> <span>${value}</span></div>` : "");
+
+      const sectionsHtml = toPrint
+        .map((o) => {
+          const items = itemsByOrder[o.order_id] || [];
+          const totalQty = items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+          const totalNa = items.reduce((s, i) => s + (Number(i.na) || 0), 0);
+          const totalWt = items.reduce((s, i) => s + (Number(i.weight_ton) || 0), 0);
+          const itemRows = items
+            .map((it) => `<tr>
+              <td>${it.item_name}${it.shade ? ` <span class="badge">${it.shade}</span>` : ""}${it.model ? ` <span class="badge blue">${it.model}</span>` : ""}</td>
+              <td>${it.size}</td><td>${it.thickness}</td>
+              <td class="num">${it.qty}</td><td class="num">${Number(it.na).toFixed(3)}</td><td class="num">${Number(it.weight_ton).toFixed(3)}</td>
+            </tr>`)
+            .join("");
+
+          return `<div class="order-section">
+            <div class="order-head">
+              <span class="order-id">${o.order_id}</span>
+              <span class="order-status">${o.status}</span>
+            </div>
+            <div class="details-grid">
+              ${field("Date", formatDate(o.order_date))}
+              ${field("Party", o.party_name)}
+              ${field("Brand", o.brand)}
+              ${field("Destination", o.destination)}
+              ${field("Sales Person", o.sales_person)}
+              ${field("Appr. Date", o.approved_at ? formatDate(o.approved_at) : "")}
+              ${field("Bill No", o.bill_no)}
+              ${field("Indent No", o.client_order_no)}
+              ${field("Indent Date", o.indent_date ? formatDate(o.indent_date) : "")}
+            </div>
+            ${o.remark ? `<p class="remark"><strong>Remark:</strong> ${o.remark}</p>` : ""}
+            <table>
+              <thead><tr><th>Item / Model</th><th>Size</th><th>Thick</th><th class="num">Qty</th><th class="num">NA</th><th class="num">Wt(Ton)</th></tr></thead>
+              <tbody>${itemRows || `<tr><td colspan="6" style="text-align:center;color:#9295a8;">No items found.</td></tr>`}</tbody>
+              <tfoot><tr><td colspan="3" style="text-align:right;color:#8a8da0;">Total</td><td class="num">${totalQty}</td><td class="num">${totalNa.toFixed(3)}</td><td class="num">${totalWt.toFixed(3)}</td></tr></tfoot>
+            </table>
+          </div>`;
+        })
+        .join("");
+
+      const html = `<!DOCTYPE html><html><head><title>${title}</title><style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 20px; color: #1c1e26; }
+        h1 { font-size: 18px; border-bottom: 2px solid #14161f; padding-bottom: 10px; }
+        .sub { color: #9295a8; font-size: 12px; margin-bottom: 20px; }
+        .order-section { border: 1px solid #dee2e6; border-radius: 10px; padding: 16px 18px; margin-bottom: 20px; page-break-inside: avoid; }
+        .order-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eceef4; padding-bottom: 10px; margin-bottom: 12px; }
+        .order-id { font-family: monospace; font-weight: 700; color: #b5620f; font-size: 14px; }
+        .order-status { background: #f1f2f6; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+        .details-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; margin-bottom: 10px; }
+        .details-grid div { padding: 4px 0; border-bottom: 1px solid #f4f4f7; }
+        .details-grid strong { color: #5b5f72; margin-right: 5px; }
+        .remark { font-size: 12px; background: #f6f7fb; padding: 8px 10px; border-radius: 8px; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { border: 1px solid #dee2e6; padding: 6px 8px; text-align: left; }
+        thead { background: #14161f; color: #fff; }
+        td.num, th.num { text-align: right; }
+        .badge { font-size: 10px; background: #fff4de; color: #b5620f; padding: 1px 6px; border-radius: 10px; }
+        .badge.blue { background: #e8f1ff; color: #1d5fc7; }
+        @media print { #printBtn { display: none; } .order-section { page-break-after: always; } .order-section:last-child { page-break-after: auto; } }
+      </style></head><body>
+        <h1>${title}</h1>
+        <div class="sub">Generated ${formatDate(new Date())} — ${toPrint.length} order(s)</div>
+        ${sectionsHtml}
+        <div style="text-align:center; margin-top:20px;">
+          <button id="printBtn" onclick="window.print()" style="padding:10px 22px; font-size:15px; cursor:pointer;">Print / Save as PDF</button>
+        </div>
+      </body></html>`;
+      const win = window.open("", title, "width=950,height=850");
+      win.document.write(html);
+      win.document.close();
+    } catch (err) {
+      alert("Failed to build detailed print: " + err.message);
+    } finally {
+      setPrintingDetailed(false);
+    }
+  }
+
   async function requestAction(orderId, newStatus) {
     setOpenMenuId(null);
     setPendingAction({ orderId, newStatus });
@@ -200,13 +297,16 @@ export default function Verification({ currentUser, onEditOrder }) {
   function exportCsv() {
     const headers = [
       "Order ID", "Date", "Party Name", "Brand", "Destination", "Sales",
-      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status", "Truck No", "Bill Amt",
+      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status",
+      "Bill No", "Indent No", "Indent Date",
+      "Bill Amt",
     ];
     const rows = filtered.map((o) => [
       o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
       o.sales_person || "-", o.total_qty, o.total_weight, o.created_by || "-",
       formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
-      o.truck_no || "-", o.bill_amount || "-",
+      o.bill_no || "-", o.client_order_no || "-", o.indent_date ? formatDate(o.indent_date) : "-",
+      o.bill_amount || "-",
     ]);
     const csv = "\uFEFF" + [headers, ...rows]
       .map((r) => r.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
@@ -232,6 +332,8 @@ export default function Verification({ currentUser, onEditOrder }) {
         .vf-date-input { width: 100%; box-sizing: border-box; border: 1px solid #e1e3ec; border-radius: 10px; padding: 9px 11px; font-size: 13px; }
         .vf-btn-sort-active { background: #e8f1ff; color: #1d5fc7; }
         .vf-print-btn { border: 1px solid #cfe0ff; background: #e8f1ff; color: #1d5fc7; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+        .vf-print-detailed-btn { border: 1px solid #c3e6cc; background: #eafaf1; color: #1a8a4c; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+        .vf-print-detailed-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .vf-filterbar {
           background: #fff; border: 1px solid #eceef4; border-radius: 16px;
@@ -374,6 +476,9 @@ export default function Verification({ currentUser, onEditOrder }) {
           <button className="vf-print-btn" onClick={printSelected}>
             <Printer size={15} /> {selectedIds.size > 0 ? `Print Selected (${selectedIds.size})` : "Print All"}
           </button>
+          <button className="vf-print-detailed-btn" onClick={printSelectedDetailed} disabled={printingDetailed}>
+            <Printer size={15} /> {printingDetailed ? "Preparing..." : selectedIds.size > 0 ? `Print Full Details (${selectedIds.size})` : "Print All (Full Details)"}
+          </button>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <div className="vf-search">
@@ -401,7 +506,9 @@ export default function Verification({ currentUser, onEditOrder }) {
                   </th>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
-                  <th>Plan Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
+                  <th>Plan Date</th><th>Status</th>
+                  <th>Bill No</th><th>Indent No</th><th>Indent Date</th>
+                  <th>Bill Amt (₹)</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -428,7 +535,9 @@ export default function Verification({ currentUser, onEditOrder }) {
                           {o.status}
                         </span>
                       </td>
-                      <td data-label="Truck No">{o.truck_no || <span className="vf-empty-cell">-</span>}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="vf-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="vf-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="vf-empty-cell">-</span>}</td>
                       <td data-label="Bill Amt">{o.bill_amount ? `₹${Number(o.bill_amount).toLocaleString("en-IN")}` : <span className="vf-empty-cell">-</span>}</td>
                       <td data-label="Action">
                         <div className="vf-actioncell">

@@ -6,7 +6,6 @@ import BulkOrderUpload from "./pages/BulkOrderUpload";
 import Verification from "./pages/Verification";
 import Picking from "./pages/Picking";
 import Planning from "./pages/Planning";
-import Packing from "./pages/Packing";
 import Dispatch from "./pages/Dispatch";
 import History from "./pages/History";
 import Dashboard from "./pages/Dashboard";
@@ -26,7 +25,6 @@ export const VIEW_ROLE = {
   verification: "Verification",
   picking: "Picking",
   planning: "Planning",
-  packing: "Packing",
   dispatch: "Dispatch",
   production: "Production",
   history: "History",
@@ -89,19 +87,22 @@ function App() {
   useEffect(() => {
     if (!currentUser) return;
     async function loadCounts() {
-      const [verifRes, pickRes, planRes, packRes, dispRes] = await Promise.all([
+      // Approved/Planning/Dispatch now all draw from the same broadened
+      // status set (an order only leaves once fully dispatched or closed),
+      // so their sidebar counts share that same query — Planning also
+      // requires a plan_dispatch_date to be set.
+      const pipelineStatuses = ["Confirmed", "Picked", "Ready to Ship", "Partially Dispatched"];
+      const [verifRes, pickRes, planRes, dispRes] = await Promise.all([
         supabase.from("orders").select("*", { count: "exact", head: true }).in("status", ["Pending", "On Hold"]),
-        supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Confirmed"),
-        supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Confirmed").not("plan_dispatch_date", "is", null),
-        supabase.from("orders").select("*", { count: "exact", head: true }).eq("status", "Picked"),
-        supabase.from("orders").select("*", { count: "exact", head: true }).in("status", ["Ready to Ship", "Partially Dispatched"]),
+        supabase.from("orders").select("*", { count: "exact", head: true }).in("status", pipelineStatuses),
+        supabase.from("orders").select("*", { count: "exact", head: true }).in("status", pipelineStatuses).not("plan_dispatch_date", "is", null),
+        supabase.from("orders").select("*", { count: "exact", head: true }).in("status", pipelineStatuses),
       ]);
       setNavCounts((prev) => ({
         ...prev,
         verification: verifRes.error ? prev.verification : verifRes.count || 0,
         picking: pickRes.error ? prev.picking : pickRes.count || 0,
         planning: planRes.error ? prev.planning : planRes.count || 0,
-        packing: packRes.error ? prev.packing : packRes.count || 0,
         dispatch: dispRes.error ? prev.dispatch : dispRes.count || 0,
       }));
     }
@@ -170,8 +171,6 @@ function App() {
     pageContent = <Picking currentUser={currentUser} />;
   } else if (activeView === "planning") {
     pageContent = <Planning currentUser={currentUser} />;
-  } else if (activeView === "packing") {
-    pageContent = <Packing />;
   } else if (activeView === "dispatch") {
     pageContent = <Dispatch currentUser={currentUser} requireLogin={requireLogin} />;
   } else if (activeView === "history") {

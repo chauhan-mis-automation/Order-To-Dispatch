@@ -75,12 +75,7 @@ export function printGridPreview(header, items) {
         <div><strong>Date:</strong> <span>${fmt(header.orderDate)}</span></div>
         <div><strong>Indent Date:</strong> <span>${fmt(header.indentDate)}</span></div>
         <div><strong>Bill No:</strong> <span>${header.billNo || "-"}</span></div>
-        <div><strong>Order No:</strong> <span>${header.clientOrderNo || "-"}</span></div>
-        <div><strong>Transport:</strong> <span>${header.transport || "-"}</span></div>
-        <div><strong>Truck No:</strong> <span>${header.truckNo || "-"}</span></div>
-        <div><strong>Mode of Vehicle:</strong> <span>${header.modeOfVehicle || "-"}</span></div>
-        <div><strong>Driver Name:</strong> <span>${header.driverName || "-"}</span></div>
-        <div><strong>Driver Mobile:</strong> <span>${header.driverMobile || "-"}</span></div>
+        <div><strong>Indent No:</strong> <span>${header.clientOrderNo || "-"}</span></div>
       </div>
 
       ${sections}

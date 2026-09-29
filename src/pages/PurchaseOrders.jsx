@@ -123,6 +123,29 @@ export default function PurchaseOrders({ currentUser }) {
     return materials.find((m) => m.name === name)?.unit || "";
   }
 
+  // last 3 times this material was purchased — date, vendor, rate, qty — across all POs
+  function materialHistory(materialName) {
+    if (!materialName) return [];
+    const rows = [];
+    Object.entries(poItemsMap).forEach(([poId, items]) => {
+      const po = pos.find((p) => p.id === poId);
+      if (!po) return;
+      items.forEach((it) => {
+        if (it.material?.name === materialName) {
+          rows.push({
+            date: po.po_date || po.created_at,
+            vendor: po.vendor_name,
+            rate: Number(it.rate) || 0,
+            qty: Number(it.qty_ordered) || 0,
+          });
+        }
+      });
+    });
+    return rows
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 3);
+  }
+
   async function addUom() {
     if (!newUomInput.trim()) return;
     try {
@@ -370,6 +393,9 @@ export default function PurchaseOrders({ currentUser }) {
         .po-line-row label { display: block; font-size: 10px; font-weight: 700; color: #9295a8; margin-bottom: 4px; text-transform: uppercase; }
         .po-line-input { width: 100%; box-sizing: border-box; border: 1px solid #e1e3ec; border-radius: 9px; padding: 8px 10px; font-size: 12.5px; }
         .po-line-unit { font-size: 11px; color: #9295a8; padding: 8px 0; }
+        .po-history-hint { margin-top: 6px; background: #f6f7fb; border-radius: 8px; padding: 7px 10px; }
+        .po-history-label { font-size: 10px; font-weight: 700; color: #9295a8; text-transform: uppercase; letter-spacing: 0.03em; display: block; margin-bottom: 3px; }
+        .po-history-row { font-size: 11px; color: #4a4d5c; font-family: 'IBM Plex Mono', monospace; line-height: 1.5; }
         .po-line-amount { font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: #1a8a4c; padding: 8px 0; font-size: 13px; }
         .po-line-del { border: 1px solid #e6e8f0; background: #fff; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; color: #c23c33; display: flex; align-items: center; justify-content: center; }
         .po-add-line-btn { border: 1px dashed #cfe0ff; background: #f5f9ff; color: #1d5fc7; border-radius: 9px; padding: 8px 14px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; margin-top: 4px; }
@@ -514,6 +540,20 @@ export default function PurchaseOrders({ currentUser }) {
                 {locked ? <div className="po-line-unit">{li.materialName}</div> : (
                   <ComboBox value={li.materialName} onChange={(v) => updateLine(li.key, "materialName", v)} options={materials.map((m) => m.name)} placeholder="Select material" />
                 )}
+                {li.materialName && (() => {
+                  const history = materialHistory(li.materialName);
+                  if (history.length === 0) return null;
+                  return (
+                    <div className="po-history-hint">
+                      <span className="po-history-label">Last {history.length} purchase{history.length > 1 ? "s" : ""}:</span>
+                      {history.map((h, i) => (
+                        <div key={i} className="po-history-row">
+                          {fmtDate(h.date)} — ₹{h.rate.toFixed(2)}/unit ({h.qty} qty) — {h.vendor}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <label>Qty</label>

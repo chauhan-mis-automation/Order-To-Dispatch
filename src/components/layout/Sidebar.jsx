@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ShoppingBasket,
   CalendarClock,
-  PackageCheck,
   Truck,
   History,
   Plus,
@@ -25,15 +24,14 @@ import {
 /*  O2D FMS — Sidebar Navigation                                       */
 /*  Design concept: "control tower" for a plywood/laminate dispatch    */
 /*  operation. A vertical pipeline rail literally traces the physical  */
-/*  flow of an order — Verification → Picking → Planning → Packing →   */
-/*  Dispatch — because that sequence is real, not decorative.          */
+/*  flow of an order — Verification → Approved → Planning → Dispatch — */
+/*  because that sequence is real, not decorative.                     */
 /* ------------------------------------------------------------------ */
 
 const PIPELINE = [
   { id: "verification", label: "Verification", icon: CheckCircle2, count: 12 },
-  { id: "picking", label: "Picking", icon: ShoppingBasket, count: 7 },
+  { id: "picking", label: "Approved", icon: ShoppingBasket, count: 7 },
   { id: "planning", label: "Planning", icon: CalendarClock, count: 4 },
-  { id: "packing", label: "Packing", icon: PackageCheck, count: 3 },
   { id: "dispatch", label: "Dispatch", icon: Truck, count: 2 },
 ];
 

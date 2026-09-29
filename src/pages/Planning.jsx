@@ -1,20 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Eye, Printer, ChevronDown, RotateCcw, FileSpreadsheet, Loader2, Search,
-  PackageCheck, AlertTriangle,
+  Eye, Printer, RotateCcw, FileSpreadsheet, Loader2, Search, Lock,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
-import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PlanDateModal from "../components/ui/PlanDateModal";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
+import CloseOrderModal from "../components/ui/CloseOrderModal";
 import { printOrder } from "../utils/printOrder";
 
-const STATUSES = ["Confirmed"];
+// Same superset as Approved — kept broad so any order still sitting in a
+// legacy "Picked"/"Ready to Ship" state (from before the flow simplification)
+// doesn't get orphaned out of Planning either.
+const STATUSES = ["Confirmed", "Picked", "Ready to Ship", "Partially Dispatched"];
 
 const STATUS_STYLES = {
   Confirmed: { bg: "#e8f1ff", color: "#1d5fc7" },
+  Picked: { bg: "#e8f1ff", color: "#1d5fc7" },
+  "Ready to Ship": { bg: "#f3e8ff", color: "#8b3fd6" },
+  "Partially Dispatched": { bg: "#fff4de", color: "#b5620f" },
 };
 
 function formatDate(d) {
@@ -30,19 +35,17 @@ export default function Planning({ currentUser }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [dispatchedMap, setDispatchedMap] = useState({});
 
   const [partyFilter, setPartyFilter] = useState("");
   const [salesFilter, setSalesFilter] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [search, setSearch] = useState("");
 
-  const [openMenuId, setOpenMenuId] = useState(null);
   const [viewOrderId, setViewOrderId] = useState(null);
-
-  const [confirmTarget, setConfirmTarget] = useState(null); // orderId pending "Picked" confirm
-  const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus } needing confirm
   const [printingId, setPrintingId] = useState(null);
   const [planDateTarget, setPlanDateTarget] = useState(null); // { orderId, existingDate }
+  const [closeOrder, setCloseOrder] = useState(null);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -63,6 +66,26 @@ export default function Planning({ currentUser }) {
     loadOrders();
   }, [loadOrders]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDispatched() {
+      if (orders.length === 0) {
+        setDispatchedMap({});
+        return;
+      }
+      const orderIds = orders.map((o) => o.order_id);
+      const { data } = await supabase.from("dispatch_logs").select("order_id, dispatched_qty").in("order_id", orderIds);
+      if (cancelled) return;
+      const map = {};
+      (data || []).forEach((r) => {
+        map[r.order_id] = (map[r.order_id] || 0) + (Number(r.dispatched_qty) || 0);
+      });
+      setDispatchedMap(map);
+    }
+    loadDispatched();
+    return () => { cancelled = true; };
+  }, [orders]);
+
   const filtered = useMemo(() => {
     return orders.filter((o) => {
       if (partyFilter && o.party_name !== partyFilter) return false;
@@ -81,38 +104,6 @@ export default function Planning({ currentUser }) {
     setPartyFilter(""); setSalesFilter(""); setBrandFilter(""); setSearch("");
   }
 
-  // "Picked (Stock OK)" — quick confirm, no login needed (matches old app)
-  function requestPicked(orderId) {
-    setOpenMenuId(null);
-    setConfirmTarget(orderId);
-  }
-
-  async function confirmPicked() {
-    const orderId = confirmTarget;
-    setConfirmTarget(null);
-    const { error } = await supabase.from("orders").update({ status: "Picked" }).eq("order_id", orderId);
-    if (error) setErrorMsg("Failed to update: " + error.message);
-    else loadOrders();
-  }
-
-  // "Missing (Indent Raised)" — simple confirm, stamped with the logged-in session user
-  function requestIndent(orderId) {
-    setOpenMenuId(null);
-    setPendingAction({ orderId, newStatus: "Indent Raised" });
-  }
-
-  async function confirmIndent() {
-    if (!pendingAction) return;
-    const { orderId, newStatus } = pendingAction;
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: newStatus, approved_by: currentUser, approved_at: new Date().toISOString() })
-      .eq("order_id", orderId);
-    setPendingAction(null);
-    if (error) setErrorMsg("Failed to update: " + error.message);
-    else loadOrders();
-  }
-
   async function handlePrint(orderId) {
     setPrintingId(orderId);
     try {
@@ -125,15 +116,22 @@ export default function Planning({ currentUser }) {
   function exportCsv() {
     const headers = [
       "Order ID", "Date", "Party Name", "Brand", "Destination", "Sales",
-      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status", "Truck No", "Bill Amt",
+      "Qty", "Dispatched", "Pending", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status",
+      "Bill No", "Indent No", "Indent Date",
+      "Bill Amt",
     ];
-    const rows = filtered.map((o) => [
-      o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
-      o.sales_person || "-", o.total_qty, o.total_weight, o.created_by || "-",
-      formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
-      o.truck_no || "-", o.bill_amount || "-",
-    ]);
-    const csv = "\uFEFF" + [headers, ...rows]
+    const rows = filtered.map((o) => {
+      const dispatched = dispatchedMap[o.order_id] || 0;
+      const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
+      return [
+        o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
+        o.sales_person || "-", o.total_qty, dispatched, pending, o.total_weight, o.created_by || "-",
+        formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
+        o.bill_no || "-", o.client_order_no || "-", o.indent_date ? formatDate(o.indent_date) : "-",
+        o.bill_amount || "-",
+      ];
+    });
+    const csv = "﻿" + [headers, ...rows]
       .map((r) => r.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
       .join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -176,7 +174,7 @@ export default function Planning({ currentUser }) {
 
         .pl-table-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: hidden; min-height: 400px; }
         .pl-table-scroll { overflow-x: auto; max-height: 78vh; min-height: 340px; overflow-y: auto; }
-        table.pl-table { width: 100%; border-collapse: collapse; min-width: 1200px; font-size: 13px; }
+        table.pl-table { width: 100%; border-collapse: collapse; min-width: 1220px; font-size: 13px; }
         .pl-table thead th {
           position: sticky; top: 0; z-index: 5; background: #14161f; color: #fff; text-align: left;
           padding: 15px 18px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
@@ -187,29 +185,24 @@ export default function Planning({ currentUser }) {
         .pl-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
         .pl-empty-cell { color: #c3c5d1; }
         .pl-plandate { cursor: pointer; }
+        .pl-qty-plain { font-family: 'IBM Plex Mono', monospace; }
+        .pl-qty-split { font-size: 11.5px; line-height: 1.5; }
+        .pl-qty-split .pl-qty-total { font-weight: 700; color: #1c1e26; }
+        .pl-qty-split .pl-qty-disp { color: #1a8a4c; font-weight: 700; }
+        .pl-qty-split .pl-qty-pend { color: #c23c33; font-weight: 700; }
 
-        .pl-actioncell { display: flex; align-items: center; gap: 6px; position: relative; }
+        .pl-actioncell { display: flex; align-items: center; gap: 6px; }
         .pl-iconbtn {
           border: 1px solid #e6e8f0; background: #fff; width: 30px; height: 30px; border-radius: 8px;
           display: flex; align-items: center; justify-content: center; cursor: pointer; color: #5b5f72;
         }
         .pl-iconbtn:hover { background: #f6f7fb; }
         .pl-iconbtn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .pl-menu-btn {
-          border: none; background: #1d5fc7; color: #fff; border-radius: 9px; padding: 8px 12px;
-          font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer;
+        .pl-close-btn {
+          border: 1px solid #f3c6c3; background: #fdeceb; color: #c23c33; border-radius: 9px; padding: 7px 12px;
+          font-weight: 700; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap;
         }
-        .pl-menu-panel {
-          position: absolute; top: calc(100% + 6px); right: 0; background: #fff; border: 1px solid #e6e8f0;
-          border-radius: 12px; box-shadow: 0 14px 30px rgba(20,22,35,0.14); z-index: 100; min-width: 200px; padding: 6px;
-        }
-        .pl-menu-item {
-          display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
-          cursor: pointer; font-weight: 600;
-        }
-        .pl-menu-item:hover { background: #f6f7fb; }
-        .pl-menu-picked { color: #1a8a4c; }
-        .pl-menu-indent { color: #c23c33; }
+        .pl-close-btn:hover { background: #fbd8d6; }
 
         .pl-loading, .pl-nodata { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; color: #9295a8; gap: 10px; }
         .pl-spin { animation: pl-spin-anim 0.9s linear infinite; }
@@ -279,13 +272,17 @@ export default function Planning({ currentUser }) {
               <thead>
                 <tr>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
-                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
-                  <th>Plan Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
+                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th>
+                  <th>Indent No</th><th>Indent Date</th>
+                  <th>Appr. Date</th><th>Plan Date</th><th>Status</th>
+                  <th>Bill No</th><th>Bill Amt (₹)</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((o) => {
                   const badgeStyle = STATUS_STYLES[o.status] || { bg: "#f1f2f6", color: "#4a4d5c" };
+                  const dispatched = dispatchedMap[o.order_id] || 0;
+                  const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
                   return (
                     <tr key={o.order_id}>
                       <td data-label="Order ID"><span className="pl-oid">{o.order_id}</span></td>
@@ -294,9 +291,21 @@ export default function Planning({ currentUser }) {
                       <td data-label="Brand">{o.brand || <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Sales">{o.sales_person || <span className="pl-empty-cell">-</span>}</td>
-                      <td data-label="Qty">{o.total_qty}</td>
+                      <td data-label="Qty">
+                        {dispatched > 0 ? (
+                          <div className="pl-qty-split">
+                            <div className="pl-qty-total">{o.total_qty} total</div>
+                            <div className="pl-qty-disp">{dispatched} dispatched</div>
+                            <div className="pl-qty-pend">{pending} pending</div>
+                          </div>
+                        ) : (
+                          <span className="pl-qty-plain">{o.total_qty}</span>
+                        )}
+                      </td>
                       <td data-label="Wt(Ton)">{Number(o.total_weight).toFixed(3)}</td>
                       <td data-label="User">{o.created_by || <span className="pl-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="pl-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Appr. Date">{formatDate(o.approved_at)}</td>
                       <td data-label="Plan Date">
                         <span
@@ -314,7 +323,7 @@ export default function Planning({ currentUser }) {
                           {o.status}
                         </span>
                       </td>
-                      <td data-label="Truck No">{o.truck_no || <span className="pl-empty-cell">-</span>}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Bill Amt">{o.bill_amount ? `₹${Number(o.bill_amount).toLocaleString("en-IN")}` : <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Action">
                         <div className="pl-actioncell">
@@ -329,22 +338,9 @@ export default function Planning({ currentUser }) {
                           >
                             {printingId === o.order_id ? <Loader2 size={14} className="pl-spin" /> : <Printer size={14} />}
                           </button>
-                          <button
-                            className="pl-menu-btn"
-                            onClick={() => setOpenMenuId(openMenuId === o.order_id ? null : o.order_id)}
-                          >
-                            Picking Status <ChevronDown size={13} />
+                          <button className="pl-close-btn" title="Close order manually — cancels the pending qty" onClick={() => setCloseOrder(o)}>
+                            <Lock size={13} /> Close
                           </button>
-                          {openMenuId === o.order_id && (
-                            <div className="pl-menu-panel" onMouseLeave={() => setOpenMenuId(null)}>
-                              <div className="pl-menu-item pl-menu-picked" onClick={() => requestPicked(o.order_id)}>
-                                <PackageCheck size={15} /> Picked (Stock OK)
-                              </div>
-                              <div className="pl-menu-item pl-menu-indent" onClick={() => requestIndent(o.order_id)}>
-                                <AlertTriangle size={15} /> Missing (Indent)
-                              </div>
-                            </div>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -367,23 +363,14 @@ export default function Planning({ currentUser }) {
         onSaved={() => { setPlanDateTarget(null); loadOrders(); }}
       />
 
-      <ConfirmDialog
-        open={!!confirmTarget}
-        title="Confirm Update"
-        message={`Mark ${confirmTarget} as Picked (Stock OK)?`}
-        confirmLabel="Yes, Picked"
-        onConfirm={confirmPicked}
-        onCancel={() => setConfirmTarget(null)}
-      />
-
-      <ConfirmDialog
-        open={!!pendingAction}
-        title="Confirm Status Change"
-        message={pendingAction ? `Mark ${pendingAction.orderId} as "${pendingAction.newStatus}"?` : ""}
-        confirmLabel="Confirm"
-        onConfirm={confirmIndent}
-        onCancel={() => setPendingAction(null)}
-      />
+      {closeOrder && (
+        <CloseOrderModal
+          order={closeOrder}
+          currentUser={currentUser}
+          onClose={() => setCloseOrder(null)}
+          onClosed={() => { setCloseOrder(null); loadOrders(); }}
+        />
+      )}
     </div>
   );
 }

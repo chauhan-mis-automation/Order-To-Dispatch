@@ -11,7 +11,7 @@ export default function DispatchLogModal({ orderId, onClose }) {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const { data } = await supabase.from("dispatch_logs").select("*").eq("order_id", orderId);
+      const { data } = await supabase.from("dispatch_logs").select("*").eq("order_id", orderId).order("created_at", { ascending: true });
       if (!cancelled) {
         setLogs(data || []);
         setLoading(false);
@@ -42,18 +42,23 @@ export default function DispatchLogModal({ orderId, onClose }) {
               <table className="dl-table">
                 <thead>
                   <tr>
-                    <th>Date</th><th>Item</th><th>Size</th><th>Thk</th>
+                    <th>#</th><th>Date &amp; Time</th><th>Item</th><th>Size</th><th>Thk</th>
                     <th>Ordered</th><th>Dispatched</th><th>Pending</th><th>Truck No</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.map((log) => {
+                  {logs.map((log, idx) => {
                     const pending = Number(log.pending_qty);
                     const icon = pending > 0 ? <Hourglass size={13} /> : pending < 0 ? <PlusCircle size={13} /> : <CheckCheck size={13} />;
                     const cls = pending > 0 ? "dl-short" : pending < 0 ? "dl-excess" : "dl-full";
                     return (
                       <tr key={log.id}>
-                        <td className="dl-date">{log.created_at ? new Date(log.created_at).toLocaleDateString("en-GB") : "-"}</td>
+                        <td><span className="dl-seq">{idx + 1}</span></td>
+                        <td className="dl-date">
+                          {log.created_at
+                            ? new Date(log.created_at).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                            : "-"}
+                        </td>
                         <td className="dl-item">{log.item_name}</td>
                         <td>{log.size}</td>
                         <td>{log.thickness}</td>
@@ -86,7 +91,7 @@ export default function DispatchLogModal({ orderId, onClose }) {
         @keyframes dl-spin-anim { to { transform: rotate(360deg); } }
         .dl-empty { text-align: center; color: #b7b9c6; padding: 30px 0; background: #fff9ef; border: 1px solid #f5e3bd; border-radius: 12px; }
         .dl-table-wrap { border: 1px solid #eceef4; border-radius: 12px; overflow: hidden; overflow-x: auto; }
-        .dl-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: center; min-width: 460px; }
+        .dl-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: center; min-width: 560px; }
         .dl-table thead th { background: #f6f7fb; padding: 10px 12px; font-size: 11px; text-transform: uppercase; color: #5b5f72; }
         .dl-item { text-align: left; font-weight: 700; }
         .dl-table tbody td { padding: 10px 12px; border-top: 1px solid #f0f1f6; }
@@ -96,6 +101,7 @@ export default function DispatchLogModal({ orderId, onClose }) {
         .dl-excess { color: #b5620f; font-weight: 700; }
         .dl-full { color: #1a8a4c; font-weight: 700; }
         .dl-date { font-size: 11.5px; color: #9295a8; white-space: nowrap; }
+        .dl-seq { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: #14161f; color: #fff; font-size: 11px; font-weight: 800; }
         .dl-truck { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; }
       `}</style>
     </div>

@@ -90,13 +90,14 @@ export default function History() {
   function exportCsv() {
     const headers = [
       "Order ID", "Date", "Party Name", "Brand", "Destination", "Sales",
-      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Dispatch Date", "Status", "Truck No", "Bill Amt",
+      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Dispatch Date", "Status",
+      "Bill No", "Indent No", "Indent Date", "Bill Amt",
     ];
     const rows = filtered.map((o) => [
       o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
       o.sales_person || "-", o.total_qty, o.total_weight, o.created_by || "-",
       formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.dispatched_at ? formatDate(o.dispatched_at) : "-", o.status,
-      o.truck_no || "-", o.bill_amount || "-",
+      o.bill_no || "-", o.client_order_no || "-", o.indent_date ? formatDate(o.indent_date) : "-", o.bill_amount || "-",
     ]);
     const csv = "\uFEFF" + [headers, ...rows]
       .map((r) => r.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
@@ -227,7 +228,9 @@ export default function History() {
                 <tr>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
-                  <th>Plan Date</th><th>Dispatch Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
+                  <th>Plan Date</th><th>Dispatch Date</th><th>Status</th>
+                  <th>Bill No</th><th>Indent No</th><th>Indent Date</th>
+                  <th>Bill Amt (₹)</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -255,7 +258,9 @@ export default function History() {
                           </span>
                         )}
                       </td>
-                      <td data-label="Truck No">{o.truck_no || <span className="hs-empty-cell">-</span>}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="hs-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="hs-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Bill Amt">{o.bill_amount ? `₹${Number(o.bill_amount).toLocaleString("en-IN")}` : <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Action">
                         <div className="hs-actioncell">

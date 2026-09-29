@@ -8,8 +8,13 @@ import DispatchModal from "../components/ui/DispatchModal";
 import DispatchLogModal from "../components/ui/DispatchLogModal";
 import CloseOrderModal from "../components/ui/CloseOrderModal";
 
-const STATUSES = ["Ready to Ship", "Partially Dispatched"];
+// Broadened so the same orders visible in Approved/Planning are also
+// visible here — an order only drops out of every queue once it's fully
+// dispatched (or manually closed).
+const STATUSES = ["Confirmed", "Picked", "Ready to Ship", "Partially Dispatched"];
 const STATUS_STYLES = {
+  Confirmed: { bg: "#e8f1ff", color: "#1d5fc7" },
+  Picked: { bg: "#e8f1ff", color: "#1d5fc7" },
   "Ready to Ship": { bg: "#f3e8ff", color: "#8b3fd6" },
   "Partially Dispatched": { bg: "#fff4de", color: "#b5620f" },
 };
@@ -27,6 +32,7 @@ export default function Dispatch({ currentUser, requireLogin }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [dispatchedMap, setDispatchedMap] = useState({});
 
   const [partyFilter, setPartyFilter] = useState("");
   const [salesFilter, setSalesFilter] = useState("");
@@ -53,6 +59,26 @@ export default function Dispatch({ currentUser, requireLogin }) {
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDispatched() {
+      if (orders.length === 0) {
+        setDispatchedMap({});
+        return;
+      }
+      const orderIds = orders.map((o) => o.order_id);
+      const { data } = await supabase.from("dispatch_logs").select("order_id, dispatched_qty").in("order_id", orderIds);
+      if (cancelled) return;
+      const map = {};
+      (data || []).forEach((r) => {
+        map[r.order_id] = (map[r.order_id] || 0) + (Number(r.dispatched_qty) || 0);
+      });
+      setDispatchedMap(map);
+    }
+    loadDispatched();
+    return () => { cancelled = true; };
+  }, [orders]);
+
   const filtered = useMemo(() => {
     return orders.filter((o) => {
       if (partyFilter && o.party_name !== partyFilter) return false;
@@ -72,11 +98,15 @@ export default function Dispatch({ currentUser, requireLogin }) {
   }
 
   function exportCsv() {
-    const headers = ["Order ID", "Date", "Party Name", "Brand", "Destination", "Sales", "Qty", "Wt(Ton)", "Status"];
-    const rows = filtered.map((o) => [
-      o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
-      o.sales_person || "-", o.total_qty, o.total_weight, o.status,
-    ]);
+    const headers = ["Order ID", "Date", "Party Name", "Brand", "Destination", "Sales", "Qty", "Dispatched", "Pending", "Wt(Ton)", "Status"];
+    const rows = filtered.map((o) => {
+      const dispatched = dispatchedMap[o.order_id] || 0;
+      const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
+      return [
+        o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
+        o.sales_person || "-", o.total_qty, dispatched, pending, o.total_weight, o.status,
+      ];
+    });
     const csv = "\uFEFF" + [headers, ...rows]
       .map((r) => r.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
       .join("\n");
@@ -116,6 +146,11 @@ export default function Dispatch({ currentUser, requireLogin }) {
         .ds-oid { color: #b5620f; font-weight: 700; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
         .ds-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
         .ds-empty-cell { color: #c3c5d1; }
+        .ds-qty-plain { font-family: 'IBM Plex Mono', monospace; }
+        .ds-qty-split { font-size: 11.5px; line-height: 1.5; }
+        .ds-qty-split .ds-qty-total { font-weight: 700; color: #1c1e26; }
+        .ds-qty-split .ds-qty-disp { color: #1a8a4c; font-weight: 700; }
+        .ds-qty-split .ds-qty-pend { color: #c23c33; font-weight: 700; }
 
         .ds-actioncell { display: flex; align-items: center; gap: 8px; }
         .ds-iconbtn { border: 1px solid #e6e8f0; background: #fff; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #5b5f72; }
@@ -185,12 +220,16 @@ export default function Dispatch({ currentUser, requireLogin }) {
               <thead>
                 <tr>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
-                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Action</th>
+                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th>
+                  <th>Bill No</th><th>Indent No</th><th>Indent Date</th>
+                  <th>Status</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((o) => {
                   const badgeStyle = STATUS_STYLES[o.status] || { bg: "#f1f2f6", color: "#4a4d5c" };
+                  const dispatched = dispatchedMap[o.order_id] || 0;
+                  const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
                   return (
                     <tr key={o.order_id}>
                       <td data-label="Order ID"><span className="ds-oid">{o.order_id}</span></td>
@@ -199,8 +238,21 @@ export default function Dispatch({ currentUser, requireLogin }) {
                       <td data-label="Brand">{o.brand || <span className="ds-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="ds-empty-cell">-</span>}</td>
                       <td data-label="Sales">{o.sales_person || <span className="ds-empty-cell">-</span>}</td>
-                      <td data-label="Qty">{o.total_qty}</td>
+                      <td data-label="Qty">
+                        {dispatched > 0 ? (
+                          <div className="ds-qty-split">
+                            <div className="ds-qty-total">{o.total_qty} total</div>
+                            <div className="ds-qty-disp">{dispatched} dispatched</div>
+                            <div className="ds-qty-pend">{pending} pending</div>
+                          </div>
+                        ) : (
+                          <span className="ds-qty-plain">{o.total_qty}</span>
+                        )}
+                      </td>
                       <td data-label="Wt(Ton)">{Number(o.total_weight).toFixed(3)}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="ds-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="ds-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="ds-empty-cell">-</span>}</td>
                       <td data-label="Status">
                         <span className="ds-badge" style={{ background: badgeStyle.bg, color: badgeStyle.color }}>{o.status}</span>
                       </td>
@@ -209,18 +261,18 @@ export default function Dispatch({ currentUser, requireLogin }) {
                           <button className="ds-iconbtn" title="View Items" onClick={() => setViewOrderId(o.order_id)}>
                             <Eye size={14} />
                           </button>
-                          {o.status === "Partially Dispatched" && (
+                          {dispatched > 0 && (
                             <button className="ds-iconbtn" title="Dispatch Log" onClick={() => setVarianceOrderId(o.order_id)}>
                               <ClipboardList size={14} />
                             </button>
                           )}
-                          {o.status === "Partially Dispatched" && (
+                          {pending > 0 && (
                             <button className="ds-close-btn" title="Close order manually — cancels the pending qty" onClick={() => setCloseOrder(o)}>
                               <Lock size={13} /> Close
                             </button>
                           )}
                           <button className="ds-dispatch-btn" onClick={() => setDispatchOrder(o)}>
-                            <Pencil size={13} /> {o.status === "Partially Dispatched" ? "Dispatch Remaining" : "Dispatch"}
+                            <Pencil size={13} /> {dispatched > 0 ? "Dispatch Remaining" : "Dispatch"}
                           </button>
                         </div>
                       </td>

@@ -1,20 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Eye, Printer, ChevronDown, RotateCcw, FileSpreadsheet, Loader2, Search,
-  PackageCheck, AlertTriangle,
+  Eye, Printer, RotateCcw, FileSpreadsheet, Loader2, Search, ArrowDownAZ, Lock,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
-import ConfirmDialog from "../components/ui/ConfirmDialog";
 import PlanDateModal from "../components/ui/PlanDateModal";
 import OrderItemsModal from "../components/ui/OrderItemsModal";
+import CloseOrderModal from "../components/ui/CloseOrderModal";
 import { printOrder } from "../utils/printOrder";
 
-const STATUSES = ["Confirmed"];
+// Everything from "Confirmed" onward (until fully Dispatched) lives here —
+// "Picked"/"Ready to Ship" are kept in the query only so any order still
+// sitting in those legacy states from before the flow simplification
+// doesn't get orphaned out of every list.
+const STATUSES = ["Confirmed", "Picked", "Ready to Ship", "Partially Dispatched"];
 
 const STATUS_STYLES = {
   Confirmed: { bg: "#e8f1ff", color: "#1d5fc7" },
+  Picked: { bg: "#e8f1ff", color: "#1d5fc7" },
+  "Ready to Ship": { bg: "#f3e8ff", color: "#8b3fd6" },
+  "Partially Dispatched": { bg: "#fff4de", color: "#b5620f" },
 };
 
 function formatDate(d) {
@@ -30,19 +36,22 @@ export default function Picking({ currentUser }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [dispatchedMap, setDispatchedMap] = useState({}); // order_id -> total already dispatched qty
 
   const [partyFilter, setPartyFilter] = useState("");
   const [salesFilter, setSalesFilter] = useState("");
   const [brandFilter, setBrandFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [sortAlpha, setSortAlpha] = useState(false);
+  const [apprFromDate, setApprFromDate] = useState("");
+  const [apprToDate, setApprToDate] = useState("");
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [printingDetailed, setPrintingDetailed] = useState(false);
 
-  const [openMenuId, setOpenMenuId] = useState(null);
   const [viewOrderId, setViewOrderId] = useState(null);
-
-  const [confirmTarget, setConfirmTarget] = useState(null); // orderId pending "Picked" confirm
-  const [pendingAction, setPendingAction] = useState(null); // { orderId, newStatus } needing confirm
   const [printingId, setPrintingId] = useState(null);
   const [planDateTarget, setPlanDateTarget] = useState(null); // { orderId, existingDate }
+  const [closeOrder, setCloseOrder] = useState(null); // full order object
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -62,11 +71,36 @@ export default function Picking({ currentUser }) {
     loadOrders();
   }, [loadOrders]);
 
+  // Pull dispatch_logs for every order currently in view, so partially
+  // dispatched orders can show "X dispatched / Y pending" — same numbers
+  // the Dispatch page works off of.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadDispatched() {
+      if (orders.length === 0) {
+        setDispatchedMap({});
+        return;
+      }
+      const orderIds = orders.map((o) => o.order_id);
+      const { data } = await supabase.from("dispatch_logs").select("order_id, dispatched_qty").in("order_id", orderIds);
+      if (cancelled) return;
+      const map = {};
+      (data || []).forEach((r) => {
+        map[r.order_id] = (map[r.order_id] || 0) + (Number(r.dispatched_qty) || 0);
+      });
+      setDispatchedMap(map);
+    }
+    loadDispatched();
+    return () => { cancelled = true; };
+  }, [orders]);
+
   const filtered = useMemo(() => {
-    return orders.filter((o) => {
+    let result = orders.filter((o) => {
       if (partyFilter && o.party_name !== partyFilter) return false;
       if (salesFilter && o.sales_person !== salesFilter) return false;
       if (brandFilter && o.brand !== brandFilter) return false;
+      if (apprFromDate && (!o.approved_at || o.approved_at.split("T")[0] < apprFromDate)) return false;
+      if (apprToDate && (!o.approved_at || o.approved_at.split("T")[0] > apprToDate)) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         const hay = `${o.order_id} ${o.party_name} ${o.brand || ""} ${o.destination || ""} ${o.sales_person || ""}`.toLowerCase();
@@ -74,42 +108,180 @@ export default function Picking({ currentUser }) {
       }
       return true;
     });
-  }, [orders, partyFilter, salesFilter, brandFilter, search]);
+    if (sortAlpha) {
+      result = [...result].sort((a, b) => a.party_name.localeCompare(b.party_name));
+    }
+    return result;
+  }, [orders, partyFilter, salesFilter, brandFilter, search, apprFromDate, apprToDate, sortAlpha]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [orders]);
 
   function resetFilters() {
     setPartyFilter(""); setSalesFilter(""); setBrandFilter(""); setSearch("");
+    setApprFromDate(""); setApprToDate(""); setSortAlpha(false);
   }
 
-  // "Picked (Stock OK)" — quick confirm, no login needed (matches old app)
-  function requestPicked(orderId) {
-    setOpenMenuId(null);
-    setConfirmTarget(orderId);
+  function toggleSelect(orderId) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.size === filtered.length ? new Set() : new Set(filtered.map((o) => o.order_id))));
   }
 
-  async function confirmPicked() {
-    const orderId = confirmTarget;
-    setConfirmTarget(null);
-    const { error } = await supabase.from("orders").update({ status: "Picked" }).eq("order_id", orderId);
-    if (error) setErrorMsg("Failed to update: " + error.message);
-    else loadOrders();
+  function printSelected() {
+    const toPrint = selectedIds.size > 0 ? filtered.filter((o) => selectedIds.has(o.order_id)) : filtered;
+    if (toPrint.length === 0) {
+      alert("No records to print.");
+      return;
+    }
+    const title = "Approved Orders";
+    const rowsHtml = toPrint.map((o) => {
+      const dispatched = dispatchedMap[o.order_id] || 0;
+      const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
+      const qtyCell = dispatched > 0
+        ? `${o.total_qty} total<br/><span class="disp">${dispatched} dispatched</span><br/><span class="pend">${pending} pending</span>`
+        : `${o.total_qty}`;
+      return `<tr>
+        <td>${o.order_id}</td><td>${formatDate(o.order_date)}</td><td>${o.party_name}</td>
+        <td>${o.brand || "-"}</td><td>${o.destination || "-"}</td><td>${o.sales_person || "-"}</td>
+        <td class="num">${qtyCell}</td><td class="num">${Number(o.total_weight).toFixed(3)}</td>
+        <td>${o.status}</td><td>${formatDate(o.approved_at)}</td>
+      </tr>`;
+    }).join("");
+    const html = `<!DOCTYPE html><html><head><title>${title}</title><style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 20px; color: #1c1e26; }
+      h1 { font-size: 18px; border-bottom: 2px solid #14161f; padding-bottom: 10px; }
+      .sub { color: #9295a8; font-size: 12px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      th, td { border: 1px solid #dee2e6; padding: 6px 8px; text-align: left; }
+      thead { background: #14161f; color: #fff; }
+      td.num, th.num { text-align: right; }
+      td .disp { color: #1a8a4c; font-weight: 700; }
+      td .pend { color: #c23c33; font-weight: 700; }
+      @media print { #printBtn { display: none; } }
+    </style></head><body>
+      <h1>${title}</h1>
+      <div class="sub">Generated ${formatDate(new Date())} — ${toPrint.length} record(s)</div>
+      <table>
+        <thead><tr><th>Order ID</th><th>Date</th><th>Party</th><th>Brand</th><th>Destination</th><th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Appr. Date</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div style="text-align:center; margin-top:20px;">
+        <button id="printBtn" onclick="window.print()" style="padding:10px 22px; font-size:15px; cursor:pointer;">Print / Save as PDF</button>
+      </div>
+    </body></html>`;
+    const win = window.open("", title, "width=950,height=850");
+    win.document.write(html);
+    win.document.close();
   }
 
-  // "Missing (Indent Raised)" — simple confirm, stamped with the logged-in session user
-  function requestIndent(orderId) {
-    setOpenMenuId(null);
-    setPendingAction({ orderId, newStatus: "Indent Raised" });
-  }
+  async function printSelectedDetailed() {
+    const toPrint = selectedIds.size > 0 ? filtered.filter((o) => selectedIds.has(o.order_id)) : filtered;
+    if (toPrint.length === 0) {
+      alert("No records to print.");
+      return;
+    }
+    setPrintingDetailed(true);
+    try {
+      const orderIds = toPrint.map((o) => o.order_id);
+      const { data: allItems } = await supabase.from("order_items").select("*").in("order_id", orderIds);
+      const itemsByOrder = {};
+      (allItems || []).forEach((it) => {
+        itemsByOrder[it.order_id] = itemsByOrder[it.order_id] || [];
+        itemsByOrder[it.order_id].push(it);
+      });
 
-  async function confirmIndent() {
-    if (!pendingAction) return;
-    const { orderId, newStatus } = pendingAction;
-    const { error } = await supabase
-      .from("orders")
-      .update({ status: newStatus, approved_by: currentUser, approved_at: new Date().toISOString() })
-      .eq("order_id", orderId);
-    setPendingAction(null);
-    if (error) setErrorMsg("Failed to update: " + error.message);
-    else loadOrders();
+      const title = "Approved Orders — Full Details";
+      const field = (label, value) => (value ? `<div><strong>${label}:</strong> <span>${value}</span></div>` : "");
+
+      const sectionsHtml = toPrint
+        .map((o) => {
+          const items = itemsByOrder[o.order_id] || [];
+          const totalQty = items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+          const totalNa = items.reduce((s, i) => s + (Number(i.na) || 0), 0);
+          const totalWt = items.reduce((s, i) => s + (Number(i.weight_ton) || 0), 0);
+          const dispatched = dispatchedMap[o.order_id] || 0;
+          const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
+          const itemRows = items
+            .map((it) => `<tr>
+              <td>${it.item_name}${it.shade ? ` <span class="badge">${it.shade}</span>` : ""}${it.model ? ` <span class="badge blue">${it.model}</span>` : ""}</td>
+              <td>${it.size}</td><td>${it.thickness}</td>
+              <td class="num">${it.qty}</td><td class="num">${Number(it.na).toFixed(3)}</td><td class="num">${Number(it.weight_ton).toFixed(3)}</td>
+            </tr>`)
+            .join("");
+
+          return `<div class="order-section">
+            <div class="order-head">
+              <span class="order-id">${o.order_id}</span>
+              <span class="order-status">${o.status}</span>
+            </div>
+            <div class="details-grid">
+              ${field("Date", formatDate(o.order_date))}
+              ${field("Party", o.party_name)}
+              ${field("Brand", o.brand)}
+              ${field("Destination", o.destination)}
+              ${field("Sales Person", o.sales_person)}
+              ${field("Appr. Date", o.approved_at ? formatDate(o.approved_at) : "")}
+              ${field("Bill No", o.bill_no)}
+              ${field("Indent No", o.client_order_no)}
+              ${field("Indent Date", o.indent_date ? formatDate(o.indent_date) : "")}
+              ${dispatched > 0 ? `<div><strong>Dispatched:</strong> <span class="disp">${dispatched}</span></div>` : ""}
+              ${dispatched > 0 ? `<div><strong>Pending:</strong> <span class="pend">${pending}</span></div>` : ""}
+            </div>
+            ${o.remark ? `<p class="remark"><strong>Remark:</strong> ${o.remark}</p>` : ""}
+            <table>
+              <thead><tr><th>Item / Model</th><th>Size</th><th>Thick</th><th class="num">Qty</th><th class="num">NA</th><th class="num">Wt(Ton)</th></tr></thead>
+              <tbody>${itemRows || `<tr><td colspan="6" style="text-align:center;color:#9295a8;">No items found.</td></tr>`}</tbody>
+              <tfoot><tr><td colspan="3" style="text-align:right;color:#8a8da0;">Total</td><td class="num">${totalQty}</td><td class="num">${totalNa.toFixed(3)}</td><td class="num">${totalWt.toFixed(3)}</td></tr></tfoot>
+            </table>
+          </div>`;
+        })
+        .join("");
+
+      const html = `<!DOCTYPE html><html><head><title>${title}</title><style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 20px; color: #1c1e26; }
+        h1 { font-size: 18px; border-bottom: 2px solid #14161f; padding-bottom: 10px; }
+        .sub { color: #9295a8; font-size: 12px; margin-bottom: 20px; }
+        .order-section { border: 1px solid #dee2e6; border-radius: 10px; padding: 16px 18px; margin-bottom: 20px; page-break-inside: avoid; }
+        .order-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eceef4; padding-bottom: 10px; margin-bottom: 12px; }
+        .order-id { font-family: monospace; font-weight: 700; color: #b5620f; font-size: 14px; }
+        .order-status { background: #f1f2f6; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+        .details-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; margin-bottom: 10px; }
+        .details-grid div { padding: 4px 0; border-bottom: 1px solid #f4f4f7; }
+        .details-grid strong { color: #5b5f72; margin-right: 5px; }
+        .remark { font-size: 12px; background: #f6f7fb; padding: 8px 10px; border-radius: 8px; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { border: 1px solid #dee2e6; padding: 6px 8px; text-align: left; }
+        thead { background: #14161f; color: #fff; }
+        td.num, th.num { text-align: right; }
+        .badge { font-size: 10px; background: #fff4de; color: #b5620f; padding: 1px 6px; border-radius: 10px; }
+        .badge.blue { background: #e8f1ff; color: #1d5fc7; }
+        .disp { color: #1a8a4c; font-weight: 700; }
+        .pend { color: #c23c33; font-weight: 700; }
+        @media print { #printBtn { display: none; } .order-section { page-break-after: always; } .order-section:last-child { page-break-after: auto; } }
+      </style></head><body>
+        <h1>${title}</h1>
+        <div class="sub">Generated ${formatDate(new Date())} — ${toPrint.length} order(s)</div>
+        ${sectionsHtml}
+        <div style="text-align:center; margin-top:20px;">
+          <button id="printBtn" onclick="window.print()" style="padding:10px 22px; font-size:15px; cursor:pointer;">Print / Save as PDF</button>
+        </div>
+      </body></html>`;
+      const win = window.open("", title, "width=950,height=850");
+      win.document.write(html);
+      win.document.close();
+    } catch (err) {
+      alert("Failed to build detailed print: " + err.message);
+    } finally {
+      setPrintingDetailed(false);
+    }
   }
 
   async function handlePrint(orderId) {
@@ -124,21 +296,28 @@ export default function Picking({ currentUser }) {
   function exportCsv() {
     const headers = [
       "Order ID", "Date", "Party Name", "Brand", "Destination", "Sales",
-      "Qty", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status", "Truck No", "Bill Amt",
+      "Qty", "Dispatched", "Pending", "Wt(Ton)", "User", "Appr. Date", "Plan Date", "Status",
+      "Bill No", "Indent No", "Indent Date",
+      "Bill Amt",
     ];
-    const rows = filtered.map((o) => [
-      o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
-      o.sales_person || "-", o.total_qty, o.total_weight, o.created_by || "-",
-      formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
-      o.truck_no || "-", o.bill_amount || "-",
-    ]);
-    const csv = "\uFEFF" + [headers, ...rows]
+    const rows = filtered.map((o) => {
+      const dispatched = dispatchedMap[o.order_id] || 0;
+      const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
+      return [
+        o.order_id, formatDate(o.order_date), o.party_name, o.brand || "-", o.destination || "-",
+        o.sales_person || "-", o.total_qty, dispatched, pending, o.total_weight, o.created_by || "-",
+        formatDate(o.approved_at), formatDate(o.plan_dispatch_date), o.status,
+        o.bill_no || "-", o.client_order_no || "-", o.indent_date ? formatDate(o.indent_date) : "-",
+        o.bill_amount || "-",
+      ];
+    });
+    const csv = "﻿" + [headers, ...rows]
       .map((r) => r.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
       .join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `Picking_Export_${new Date().toISOString().split("T")[0]}.csv`;
+    link.download = `Approved_Export_${new Date().toISOString().split("T")[0]}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -154,11 +333,18 @@ export default function Picking({ currentUser }) {
           display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap;
         }
         .pk-filter-item { flex: 1; min-width: 170px; }
+        .pk-date-label { display: block; font-size: 11px; font-weight: 700; color: #5b5f72; margin-bottom: 6px; }
+        .pk-date-input { width: 100%; box-sizing: border-box; border: 1px solid #e1e3ec; border-radius: 10px; padding: 9px 11px; font-size: 13px; }
+        .pk-actions-row { display: flex; gap: 8px; }
         .pk-btn {
           border: none; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px;
           cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
         }
         .pk-btn-reset { background: #f1f2f6; color: #4a4d5c; }
+        .pk-btn-sort-active { background: #e8f1ff; color: #1d5fc7; }
+        .pk-print-btn { border: 1px solid #cfe0ff; background: #e8f1ff; color: #1d5fc7; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+        .pk-print-detailed-btn { border: 1px solid #c3e6cc; background: #eafaf1; color: #1a8a4c; border-radius: 10px; padding: 10px 16px; font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+        .pk-print-detailed-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .pk-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 10px; }
         .pk-csv-btn {
@@ -175,7 +361,7 @@ export default function Picking({ currentUser }) {
 
         .pk-table-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: hidden; min-height: 400px; }
         .pk-table-scroll { overflow-x: auto; max-height: 78vh; min-height: 340px; overflow-y: auto; }
-        table.pk-table { width: 100%; border-collapse: collapse; min-width: 1200px; font-size: 13px; }
+        table.pk-table { width: 100%; border-collapse: collapse; min-width: 1220px; font-size: 13px; }
         .pk-table thead th {
           position: sticky; top: 0; z-index: 5; background: #14161f; color: #fff; text-align: left;
           padding: 15px 18px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
@@ -186,29 +372,24 @@ export default function Picking({ currentUser }) {
         .pk-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
         .pk-empty-cell { color: #c3c5d1; }
         .pk-plandate { cursor: pointer; }
+        .pk-qty-plain { font-family: 'IBM Plex Mono', monospace; }
+        .pk-qty-split { font-size: 11.5px; line-height: 1.5; }
+        .pk-qty-split .pk-qty-total { font-weight: 700; color: #1c1e26; }
+        .pk-qty-split .pk-qty-disp { color: #1a8a4c; font-weight: 700; }
+        .pk-qty-split .pk-qty-pend { color: #c23c33; font-weight: 700; }
 
-        .pk-actioncell { display: flex; align-items: center; gap: 6px; position: relative; }
+        .pk-actioncell { display: flex; align-items: center; gap: 6px; }
         .pk-iconbtn {
           border: 1px solid #e6e8f0; background: #fff; width: 30px; height: 30px; border-radius: 8px;
           display: flex; align-items: center; justify-content: center; cursor: pointer; color: #5b5f72;
         }
         .pk-iconbtn:hover { background: #f6f7fb; }
         .pk-iconbtn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .pk-menu-btn {
-          border: none; background: #1d5fc7; color: #fff; border-radius: 9px; padding: 8px 12px;
-          font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer;
+        .pk-close-btn {
+          border: 1px solid #f3c6c3; background: #fdeceb; color: #c23c33; border-radius: 9px; padding: 7px 12px;
+          font-weight: 700; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap;
         }
-        .pk-menu-panel {
-          position: absolute; top: calc(100% + 6px); right: 0; background: #fff; border: 1px solid #e6e8f0;
-          border-radius: 12px; box-shadow: 0 14px 30px rgba(20,22,35,0.14); z-index: 100; min-width: 200px; padding: 6px;
-        }
-        .pk-menu-item {
-          display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
-          cursor: pointer; font-weight: 600;
-        }
-        .pk-menu-item:hover { background: #f6f7fb; }
-        .pk-menu-picked { color: #1a8a4c; }
-        .pk-menu-indent { color: #c23c33; }
+        .pk-close-btn:hover { background: #fbd8d6; }
 
         .pk-loading, .pk-nodata { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; color: #9295a8; gap: 10px; }
         .pk-spin { animation: pk-spin-anim 0.9s linear infinite; }
@@ -247,15 +428,36 @@ export default function Picking({ currentUser }) {
         <div className="pk-filter-item">
           <ComboBox label="Brand" value={brandFilter} onChange={setBrandFilter} options={master.brands} placeholder="All Brands" />
         </div>
-        <button className="pk-btn pk-btn-reset" onClick={resetFilters}>
-          <RotateCcw size={14} /> Reset
-        </button>
+        <div className="pk-filter-item">
+          <label className="pk-date-label">Approval Date From</label>
+          <input type="date" className="pk-date-input" value={apprFromDate} onChange={(e) => setApprFromDate(e.target.value)} />
+        </div>
+        <div className="pk-filter-item">
+          <label className="pk-date-label">Approval Date To</label>
+          <input type="date" className="pk-date-input" value={apprToDate} onChange={(e) => setApprToDate(e.target.value)} />
+        </div>
+        <div className="pk-actions-row">
+          <button className={`pk-btn ${sortAlpha ? "pk-btn-sort-active" : "pk-btn-reset"}`} onClick={() => setSortAlpha((s) => !s)}>
+            <ArrowDownAZ size={14} /> {sortAlpha ? "Sorted A-Z" : "Sort A-Z"}
+          </button>
+          <button className="pk-btn pk-btn-reset" onClick={resetFilters}>
+            <RotateCcw size={14} /> Reset
+          </button>
+        </div>
       </div>
 
       <div className="pk-toolbar">
-        <button className="pk-csv-btn" onClick={exportCsv}>
-          <FileSpreadsheet size={15} /> Export to CSV
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="pk-csv-btn" onClick={exportCsv}>
+            <FileSpreadsheet size={15} /> Export to CSV
+          </button>
+          <button className="pk-print-btn" onClick={printSelected}>
+            <Printer size={15} /> {selectedIds.size > 0 ? `Print Selected (${selectedIds.size})` : "Print All"}
+          </button>
+          <button className="pk-print-detailed-btn" onClick={printSelectedDetailed} disabled={printingDetailed}>
+            <Printer size={15} /> {printingDetailed ? "Preparing..." : selectedIds.size > 0 ? `Print Full Details (${selectedIds.size})` : "Print All (Full Details)"}
+          </button>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <div className="pk-search">
             <Search size={14} />
@@ -277,25 +479,47 @@ export default function Picking({ currentUser }) {
             <table className="pk-table">
               <thead>
                 <tr>
+                  <th style={{ width: 34 }}>
+                    <input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0} onChange={toggleSelectAll} />
+                  </th>
                   <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
-                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
-                  <th>Plan Date</th><th>Status</th><th>Truck No</th><th>Bill Amt (₹)</th><th>Action</th>
+                  <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th>
+                  <th>Indent No</th><th>Indent Date</th>
+                  <th>Appr. Date</th><th>Plan Date</th><th>Status</th>
+                  <th>Bill No</th><th>Bill Amt (₹)</th><th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((o) => {
                   const badgeStyle = STATUS_STYLES[o.status] || { bg: "#f1f2f6", color: "#4a4d5c" };
+                  const dispatched = dispatchedMap[o.order_id] || 0;
+                  const pending = Math.max(0, (Number(o.total_qty) || 0) - dispatched);
                   return (
                     <tr key={o.order_id}>
+                      <td data-label="Select">
+                        <input type="checkbox" checked={selectedIds.has(o.order_id)} onChange={() => toggleSelect(o.order_id)} />
+                      </td>
                       <td data-label="Order ID"><span className="pk-oid">{o.order_id}</span></td>
                       <td data-label="Date">{formatDate(o.order_date)}</td>
                       <td data-label="Party Name">{o.party_name}</td>
                       <td data-label="Brand">{o.brand || <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Sales">{o.sales_person || <span className="pk-empty-cell">-</span>}</td>
-                      <td data-label="Qty">{o.total_qty}</td>
+                      <td data-label="Qty">
+                        {dispatched > 0 ? (
+                          <div className="pk-qty-split">
+                            <div className="pk-qty-total">{o.total_qty} total</div>
+                            <div className="pk-qty-disp">{dispatched} dispatched</div>
+                            <div className="pk-qty-pend">{pending} pending</div>
+                          </div>
+                        ) : (
+                          <span className="pk-qty-plain">{o.total_qty}</span>
+                        )}
+                      </td>
                       <td data-label="Wt(Ton)">{Number(o.total_weight).toFixed(3)}</td>
                       <td data-label="User">{o.created_by || <span className="pk-empty-cell">-</span>}</td>
+                      <td data-label="Indent No">{o.client_order_no || <span className="pk-empty-cell">-</span>}</td>
+                      <td data-label="Indent Date">{o.indent_date ? formatDate(o.indent_date) : <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Appr. Date">{formatDate(o.approved_at)}</td>
                       <td data-label="Plan Date">
                         <span
@@ -313,7 +537,7 @@ export default function Picking({ currentUser }) {
                           {o.status}
                         </span>
                       </td>
-                      <td data-label="Truck No">{o.truck_no || <span className="pk-empty-cell">-</span>}</td>
+                      <td data-label="Bill No">{o.bill_no || <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Bill Amt">{o.bill_amount ? `₹${Number(o.bill_amount).toLocaleString("en-IN")}` : <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Action">
                         <div className="pk-actioncell">
@@ -328,22 +552,9 @@ export default function Picking({ currentUser }) {
                           >
                             {printingId === o.order_id ? <Loader2 size={14} className="pk-spin" /> : <Printer size={14} />}
                           </button>
-                          <button
-                            className="pk-menu-btn"
-                            onClick={() => setOpenMenuId(openMenuId === o.order_id ? null : o.order_id)}
-                          >
-                            Picking Status <ChevronDown size={13} />
+                          <button className="pk-close-btn" title="Close order manually — cancels the pending qty" onClick={() => setCloseOrder(o)}>
+                            <Lock size={13} /> Close
                           </button>
-                          {openMenuId === o.order_id && (
-                            <div className="pk-menu-panel" onMouseLeave={() => setOpenMenuId(null)}>
-                              <div className="pk-menu-item pk-menu-picked" onClick={() => requestPicked(o.order_id)}>
-                                <PackageCheck size={15} /> Picked (Stock OK)
-                              </div>
-                              <div className="pk-menu-item pk-menu-indent" onClick={() => requestIndent(o.order_id)}>
-                                <AlertTriangle size={15} /> Missing (Indent)
-                              </div>
-                            </div>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -366,23 +577,14 @@ export default function Picking({ currentUser }) {
         onSaved={() => { setPlanDateTarget(null); loadOrders(); }}
       />
 
-      <ConfirmDialog
-        open={!!confirmTarget}
-        title="Confirm Update"
-        message={`Mark ${confirmTarget} as Picked (Stock OK)?`}
-        confirmLabel="Yes, Picked"
-        onConfirm={confirmPicked}
-        onCancel={() => setConfirmTarget(null)}
-      />
-
-      <ConfirmDialog
-        open={!!pendingAction}
-        title="Confirm Status Change"
-        message={pendingAction ? `Mark ${pendingAction.orderId} as "${pendingAction.newStatus}"?` : ""}
-        confirmLabel="Confirm"
-        onConfirm={confirmIndent}
-        onCancel={() => setPendingAction(null)}
-      />
+      {closeOrder && (
+        <CloseOrderModal
+          order={closeOrder}
+          currentUser={currentUser}
+          onClose={() => setCloseOrder(null)}
+          onClosed={() => { setCloseOrder(null); loadOrders(); }}
+        />
+      )}
     </div>
   );
 }

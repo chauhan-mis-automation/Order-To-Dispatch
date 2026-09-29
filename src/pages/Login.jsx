@@ -1,16 +1,15 @@
 import React, { useState } from "react";
 import {
   ShieldCheck, Loader2, Boxes, CheckCircle2, FlaskConical,
-  ShoppingBasket, CalendarClock, PackageCheck, Truck,
+  ShoppingBasket, CalendarClock, Truck,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 
 const PIPELINE_STAGES = [
   { label: "Verification", icon: CheckCircle2 },
   { label: "Indent", icon: FlaskConical },
-  { label: "Picking", icon: ShoppingBasket },
+  { label: "Approved", icon: ShoppingBasket },
   { label: "Planning", icon: CalendarClock },
-  { label: "Packing", icon: PackageCheck },
   { label: "Dispatch", icon: Truck },
 ];
 
@@ -254,7 +253,7 @@ export default function Login({ onSuccess }) {
         <h1 className="login-brand-title">O2D FMS</h1>
         <p className="login-brand-sub">
           Order-to-Dispatch factory management — track every order from booking through
-          verification, production, picking, packing and dispatch in one place.
+          verification, production, approval, planning and dispatch in one place.
         </p>
         <div className="login-brand-tags">
           <span className="login-tag">Order Tracking</span>

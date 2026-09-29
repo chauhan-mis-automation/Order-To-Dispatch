@@ -68,13 +68,8 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
   const [remark, setRemark] = useState("");
   const [fileLink, setFileLink] = useState("");
   const [billNo, setBillNo] = useState("");
-  const [transport, setTransport] = useState("");
   const [clientOrderNo, setClientOrderNo] = useState("");
   const [indentDate, setIndentDate] = useState("");
-  const [driverName, setDriverName] = useState("");
-  const [driverMobile, setDriverMobile] = useState("");
-  const [truckNo, setTruckNo] = useState("");
-  const [modeOfVehicle, setModeOfVehicle] = useState("");
   const [items, setItems] = useState([emptyRow()]);
   const [entryMode, setEntryMode] = useState("list"); // "list" | "grid"
   const [gridQty, setGridQty] = useState({});
@@ -113,13 +108,8 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
       setOrderDate(o.order_date);
       setParty(o.party_name || "");
       setBillNo(o.bill_no || "");
-      setTransport(o.transport || "");
       setClientOrderNo(o.client_order_no || "");
       setIndentDate(o.indent_date || "");
-      setDriverName(o.driver_name || "");
-      setDriverMobile(o.driver_mobile || "");
-      setTruckNo(o.truck_no || "");
-      setModeOfVehicle(o.mode_of_vehicle || "");
       setSalesPerson(o.sales_person || "");
       setBrand(o.brand || "");
       setDestination(o.destination || "");
@@ -267,6 +257,7 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
     setSaving(true);
     setStatus(null);
     let editSnapshot = null;
+    let finalOrderId = orderId;
     try {
       const validItems = entryMode === "grid" ? gridItems : items.filter((r) => r.itemName.trim());
       const orderPayload = {
@@ -278,13 +269,8 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
         file_link: fileLink || null,
         remark: remark || null,
         bill_no: billNo || null,
-        transport: transport || null,
         client_order_no: clientOrderNo || null,
         indent_date: indentDate || null,
-        driver_name: driverName || null,
-        driver_mobile: driverMobile || null,
-        truck_no: truckNo || null,
-        mode_of_vehicle: modeOfVehicle || null,
         total_qty: totals.totalQty,
         total_weight: totals.totalWeight,
       };
@@ -305,16 +291,28 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
 
         editSnapshot = { beforeOrder, beforeItems };
       } else {
-        const { error: orderError } = await supabase.from("orders").insert({
-          order_id: orderId,
-          ...orderPayload,
-          status: "Pending",
-          created_by: currentUser,
-        });
-        if (orderError) throw orderError;
+        // The Order ID shown on screen was fetched when this form opened — if
+        // someone else saved an order in the meantime (or this tab sat open a
+        // while), that ID may now already be taken. Retry with a freshly
+        // fetched ID a few times before giving up, instead of failing outright.
+        let attemptsLeft = 5;
+        for (;;) {
+          const { error: orderError } = await supabase.from("orders").insert({
+            order_id: finalOrderId,
+            ...orderPayload,
+            status: "Pending",
+            created_by: currentUser,
+          });
+          if (!orderError) break;
+          const isDuplicate = orderError.code === "23505" || /duplicate key/i.test(orderError.message || "");
+          attemptsLeft -= 1;
+          if (!isDuplicate || attemptsLeft <= 0) throw orderError;
+          finalOrderId = await fetchNextOrderId();
+          setOrderId(finalOrderId);
+        }
       }
 
-      const targetOrderId = editOrderId || orderId;
+      const targetOrderId = editOrderId || finalOrderId;
       const itemRows = validItems.map((row) => ({
         order_id: targetOrderId,
         item_name: row.itemName,
@@ -351,16 +349,11 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
         setStatus({ type: "success", message: `Order ${editOrderId} updated successfully!` });
         if (onExitEdit) setTimeout(() => onExitEdit(), 1100);
       } else {
-        setStatus({ type: "success", message: `Order ${orderId} saved successfully!` });
+        setStatus({ type: "success", message: `Order ${finalOrderId} saved successfully!` });
         setParty("");
         setBillNo("");
-        setTransport("");
         setClientOrderNo("");
         setIndentDate("");
-        setDriverName("");
-        setDriverMobile("");
-        setTruckNo("");
-        setModeOfVehicle("");
         setSalesPerson("");
         setBrand("");
         setDestination("");
@@ -579,38 +572,13 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
             </div>
 
             <div className="co-text-field">
-              <label>Order No. (Your Ref.)</label>
+              <label>Indent No. (Your Ref.)</label>
               <input value={clientOrderNo} onChange={(e) => setClientOrderNo(e.target.value)} placeholder="e.g. MAY-31" />
             </div>
 
             <div className="co-text-field">
               <label>Indent Date</label>
               <input type="date" value={indentDate} onChange={(e) => setIndentDate(e.target.value)} />
-            </div>
-
-            <div className="co-text-field">
-              <label>Transport</label>
-              <input value={transport} onChange={(e) => setTransport(e.target.value)} placeholder="Optional" />
-            </div>
-
-            <div className="co-text-field">
-              <label>Truck No.</label>
-              <input value={truckNo} onChange={(e) => setTruckNo(e.target.value)} placeholder="e.g. AS-01LC-7356" />
-            </div>
-
-            <div className="co-text-field">
-              <label>Mode of Vehicle</label>
-              <input value={modeOfVehicle} onChange={(e) => setModeOfVehicle(e.target.value)} placeholder="e.g. 06 Wheeler" />
-            </div>
-
-            <div className="co-text-field">
-              <label>Driver Name</label>
-              <input value={driverName} onChange={(e) => setDriverName(e.target.value)} placeholder="Optional" />
-            </div>
-
-            <div className="co-text-field">
-              <label>Driver Mobile No.</label>
-              <input value={driverMobile} onChange={(e) => setDriverMobile(e.target.value)} placeholder="Optional" />
             </div>
 
             <div className="co-text-field span-2">
@@ -638,7 +606,7 @@ export default function CreateOrder({ currentUser = "Guest", editOrderId = null,
               <button
                 className="co-print-preview-btn"
                 onClick={() => printGridPreview(
-                  { orderDate, party, brand, destination, remark, billNo, transport, clientOrderNo, indentDate, driverName, driverMobile, truckNo, modeOfVehicle },
+                  { orderDate, party, brand, destination, remark, billNo, clientOrderNo, indentDate },
                   gridItems
                 )}
               >
