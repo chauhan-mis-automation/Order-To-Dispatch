@@ -271,7 +271,7 @@ export default function Planning({ currentUser }) {
             <table className="pl-table">
               <thead>
                 <tr>
-                  <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
+                  <th>Order ID</th><th>Order Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th>
                   <th>Indent No</th><th>Indent Date</th>
                   <th>Appr. Date</th><th>Plan Date</th><th>Status</th>
@@ -286,7 +286,7 @@ export default function Planning({ currentUser }) {
                   return (
                     <tr key={o.order_id}>
                       <td data-label="Order ID"><span className="pl-oid">{o.order_id}</span></td>
-                      <td data-label="Date">{formatDate(o.order_date)}</td>
+                      <td data-label="Order Date">{formatDate(o.order_date)}</td>
                       <td data-label="Party Name">{o.party_name}</td>
                       <td data-label="Brand">{o.brand || <span className="pl-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="pl-empty-cell">-</span>}</td>

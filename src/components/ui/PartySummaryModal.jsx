@@ -19,7 +19,7 @@ function formatDate(d) {
   return date.toLocaleDateString("en-GB");
 }
 
-export default function PartySummaryModal({ party, orders, onClose }) {
+export default function PartySummaryModal({ title, orders, onClose }) {
   const stats = useMemo(() => {
     const totalQty = orders.reduce((s, o) => s + (Number(o.total_qty) || 0), 0);
     const totalWt = orders.reduce((s, o) => s + (Number(o.total_weight) || 0), 0);
@@ -35,13 +35,13 @@ export default function PartySummaryModal({ party, orders, onClose }) {
     return { totalQty, totalWt, groups };
   }, [orders]);
 
-  if (!party) return null;
+  if (!title) return null;
 
   return (
     <div className="ps-overlay" onClick={onClose}>
       <div className="ps-card" onClick={(e) => e.stopPropagation()}>
         <div className="ps-header">
-          <h4><Building2 size={18} style={{ marginRight: 8, verticalAlign: -3 }} />{party}</h4>
+          <h4><Building2 size={18} style={{ marginRight: 8, verticalAlign: -3 }} />{title}</h4>
           <button className="ps-close" onClick={onClose}><X size={16} /></button>
         </div>
 

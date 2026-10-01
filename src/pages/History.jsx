@@ -111,10 +111,18 @@ export default function History() {
     document.body.removeChild(link);
   }
 
-  const summaryOrders = useMemo(() => {
-    if (!partyFilter) return [];
-    return filtered.filter((o) => o.party_name === partyFilter);
-  }, [filtered, partyFilter]);
+  // Summary is always available — it shows whatever combination of filters
+  // is currently active (Party/Sales/Brand/Status/date range, any, all, or
+  // none of them), summarizing exactly the same `filtered` set on screen.
+  const summaryTitle = useMemo(() => {
+    const parts = [];
+    if (partyFilter) parts.push(partyFilter);
+    if (brandFilter) parts.push(brandFilter);
+    if (salesFilter) parts.push(salesFilter);
+    if (statusFilter) parts.push(statusFilter);
+    if (startDate || endDate) parts.push(`${startDate ? formatDate(startDate) : "…"} – ${endDate ? formatDate(endDate) : "…"}`);
+    return parts.length > 0 ? parts.join(" · ") : "All Orders";
+  }, [partyFilter, brandFilter, salesFilter, statusFilter, startDate, endDate]);
 
   return (
     <div className="hs-root">
@@ -197,7 +205,7 @@ export default function History() {
 
         <div className="hs-filter-actions" style={{ gridColumn: "1 / -1" }}>
           <button className="hs-btn hs-btn-reset" onClick={resetFilters}><RotateCcw size={14} /> Reset</button>
-          <button className="hs-btn hs-btn-summary" disabled={!partyFilter} onClick={() => setShowSummary(true)}>
+          <button className="hs-btn hs-btn-summary" onClick={() => setShowSummary(true)}>
             <BarChart3 size={14} /> Summary
           </button>
         </div>
@@ -226,7 +234,7 @@ export default function History() {
             <table className="hs-table">
               <thead>
                 <tr>
-                  <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
+                  <th>Order ID</th><th>Order Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th><th>Appr. Date</th>
                   <th>Plan Date</th><th>Dispatch Date</th><th>Status</th>
                   <th>Bill No</th><th>Indent No</th><th>Indent Date</th>
@@ -239,7 +247,7 @@ export default function History() {
                   return (
                     <tr key={o.order_id}>
                       <td data-label="Order ID"><span className="hs-oid">{o.order_id}</span></td>
-                      <td data-label="Date">{formatDate(o.order_date)}</td>
+                      <td data-label="Order Date">{formatDate(o.order_date)}</td>
                       <td data-label="Party Name">{o.party_name}</td>
                       <td data-label="Brand">{o.brand || <span className="hs-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="hs-empty-cell">-</span>}</td>
@@ -290,7 +298,7 @@ export default function History() {
       <DispatchLogModal orderId={varianceOrderId} onClose={() => setVarianceOrderId(null)} />
       <OrderEditHistoryModal orderId={editHistoryOrderId} onClose={() => setEditHistoryOrderId(null)} />
       {showSummary && (
-        <PartySummaryModal party={partyFilter} orders={summaryOrders} onClose={() => setShowSummary(false)} />
+        <PartySummaryModal title={summaryTitle} orders={filtered} onClose={() => setShowSummary(false)} />
       )}
     </div>
   );

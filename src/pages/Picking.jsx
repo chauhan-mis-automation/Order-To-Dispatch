@@ -170,7 +170,7 @@ export default function Picking({ currentUser }) {
       <h1>${title}</h1>
       <div class="sub">Generated ${formatDate(new Date())} — ${toPrint.length} record(s)</div>
       <table>
-        <thead><tr><th>Order ID</th><th>Date</th><th>Party</th><th>Brand</th><th>Destination</th><th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Appr. Date</th></tr></thead>
+        <thead><tr><th>Order ID</th><th>Order Date</th><th>Party</th><th>Brand</th><th>Destination</th><th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>Status</th><th>Appr. Date</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
       <div style="text-align:center; margin-top:20px;">
@@ -482,7 +482,7 @@ export default function Picking({ currentUser }) {
                   <th style={{ width: 34 }}>
                     <input type="checkbox" checked={selectedIds.size === filtered.length && filtered.length > 0} onChange={toggleSelectAll} />
                   </th>
-                  <th>Order ID</th><th>Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
+                  <th>Order ID</th><th>Order Date</th><th>Party Name</th><th>Brand</th><th>Destination</th>
                   <th>Sales</th><th>Qty</th><th>Wt(Ton)</th><th>User</th>
                   <th>Indent No</th><th>Indent Date</th>
                   <th>Appr. Date</th><th>Plan Date</th><th>Status</th>
@@ -500,7 +500,7 @@ export default function Picking({ currentUser }) {
                         <input type="checkbox" checked={selectedIds.has(o.order_id)} onChange={() => toggleSelect(o.order_id)} />
                       </td>
                       <td data-label="Order ID"><span className="pk-oid">{o.order_id}</span></td>
-                      <td data-label="Date">{formatDate(o.order_date)}</td>
+                      <td data-label="Order Date">{formatDate(o.order_date)}</td>
                       <td data-label="Party Name">{o.party_name}</td>
                       <td data-label="Brand">{o.brand || <span className="pk-empty-cell">-</span>}</td>
                       <td data-label="Destination">{o.destination || <span className="pk-empty-cell">-</span>}</td>

@@ -81,6 +81,14 @@ export default function ComboBox({
                 />
               </div>
               <div className="ob-list">
+                {!required && (
+                  <div
+                    className={`ob-item ob-item-all ${!value ? "ob-item-active" : ""}`}
+                    onClick={() => selectValue("")}
+                  >
+                    {placeholder}
+                  </div>
+                )}
                 {filtered.length === 0 && (
                   <div className="ob-empty">No matches</div>
                 )}
@@ -141,6 +149,7 @@ export default function ComboBox({
         .ob-item { padding: 8px 10px; border-radius: 8px; font-size: 13px; cursor: pointer; color: #2c2e3a; }
         .ob-item:hover { background: #fdf3e4; }
         .ob-item-active { background: #fef1de; color: #b5620f; font-weight: 600; }
+        .ob-item-all { font-weight: 700; color: #5b5f72; border-bottom: 1px solid #f0f1f6; border-radius: 8px 8px 0 0; margin-bottom: 3px; padding-bottom: 9px; }
         .ob-empty { padding: 14px 10px; text-align: center; color: #a1a4b5; font-size: 12.5px; }
         .ob-add-btn {
           min-width: 42px; width: 42px; border-radius: 10px; border: none;

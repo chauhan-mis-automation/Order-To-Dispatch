@@ -1,10 +1,30 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { X, Loader2, ClipboardList, Hourglass, PlusCircle, CheckCheck } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+
+function keyFor(log) {
+  return `${log.item_name}_${log.brand || ""}_${log.size}_${log.thickness}`.toUpperCase();
+}
 
 export default function DispatchLogModal({ orderId, onClose }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // logs are fetched ordered by created_at ascending, so a running cumulative
+  // sum per item+brand+size+thickness gives the true "dispatched so far" at
+  // each row, instead of comparing that single row's dispatched_qty against
+  // the full original ordered_qty (which is repeated on every row).
+  const rows = useMemo(() => {
+    const cumulative = {};
+    return logs.map((log) => {
+      const key = keyFor(log);
+      const soFar = (cumulative[key] || 0) + (Number(log.dispatched_qty) || 0);
+      cumulative[key] = soFar;
+      const ordered = Number(log.ordered_qty) || 0;
+      const variance = soFar - ordered;
+      return { log, variance };
+    });
+  }, [logs]);
 
   useEffect(() => {
     if (!orderId) return;
@@ -43,14 +63,18 @@ export default function DispatchLogModal({ orderId, onClose }) {
                 <thead>
                   <tr>
                     <th>#</th><th>Date &amp; Time</th><th>Item</th><th>Size</th><th>Thk</th>
-                    <th>Ordered</th><th>Dispatched</th><th>Pending</th><th>Truck No</th>
+                    <th>Ordered</th><th>Dispatched</th><th>Variance</th><th>Truck No</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.map((log, idx) => {
-                    const pending = Number(log.pending_qty);
-                    const icon = pending > 0 ? <Hourglass size={13} /> : pending < 0 ? <PlusCircle size={13} /> : <CheckCheck size={13} />;
-                    const cls = pending > 0 ? "dl-short" : pending < 0 ? "dl-excess" : "dl-full";
+                  {rows.map(({ log, variance }, idx) => {
+                    const icon = variance < 0 ? <Hourglass size={13} /> : variance > 0 ? <PlusCircle size={13} /> : <CheckCheck size={13} />;
+                    const cls = variance < 0 ? "dl-short" : variance > 0 ? "dl-excess" : "dl-full";
+                    const label = variance < 0
+                      ? `${Math.abs(variance)} short`
+                      : variance > 0
+                        ? `${variance} extra`
+                        : "On Target";
                     return (
                       <tr key={log.id}>
                         <td><span className="dl-seq">{idx + 1}</span></td>
@@ -64,7 +88,7 @@ export default function DispatchLogModal({ orderId, onClose }) {
                         <td>{log.thickness}</td>
                         <td className="dl-ordered">{log.ordered_qty}</td>
                         <td className="dl-dispatched">{log.dispatched_qty}</td>
-                        <td className={cls}>{icon} {pending}</td>
+                        <td className={cls}>{icon} {label}</td>
                         <td className="dl-truck">{log.truck_no || "-"}</td>
                       </tr>
                     );
@@ -98,7 +122,7 @@ export default function DispatchLogModal({ orderId, onClose }) {
         .dl-ordered { background: #e8f1ff33; font-weight: 700; }
         .dl-dispatched { background: #eafaf133; font-weight: 700; }
         .dl-short { color: #c23c33; font-weight: 700; }
-        .dl-excess { color: #b5620f; font-weight: 700; }
+        .dl-excess { color: #1a8a4c; font-weight: 700; }
         .dl-full { color: #1a8a4c; font-weight: 700; }
         .dl-date { font-size: 11.5px; color: #9295a8; white-space: nowrap; }
         .dl-seq { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: #14161f; color: #fff; font-size: 11px; font-weight: 800; }
