@@ -36,6 +36,16 @@ export default function ReceiveGoodsModal({ po, items, onClose, onDone }) {
           .eq("id", item.id);
         if (itemErr) throw itemErr;
 
+        // log this receiving action (date + qty) so a partial, multi-date
+        // receipt history can be shown later, separate from the running total
+        const { error: logErr } = await supabase.from("po_receipt_logs").insert({
+          po_id: po.id,
+          item_id: item.id,
+          material_id: item.material_id,
+          qty_received: receivingNow,
+        });
+        if (logErr) throw logErr;
+
         // add the received quantity into RM stock
         const { data: existing } = await supabase
           .from("rm_stock")

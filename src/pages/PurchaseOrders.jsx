@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Loader2, ShoppingCart, PackageCheck, Search, Trash2, Printer, ChevronDown, ChevronUp, UploadCloud, Pencil } from "lucide-react";
+import { Plus, Loader2, ShoppingCart, PackageCheck, Search, Trash2, Printer, ChevronDown, ChevronUp, UploadCloud, Pencil, ClipboardList } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import ComboBox from "../components/ui/ComboBox";
 import ReceiveGoodsModal from "../components/ui/ReceiveGoodsModal";
+import ReceiptLogModal from "../components/ui/ReceiptLogModal";
 import BulkPurchaseUpload from "../components/ui/BulkPurchaseUpload";
 import { printPurchaseOrder } from "../utils/printPurchaseOrder";
 
@@ -69,6 +70,7 @@ export default function PurchaseOrders({ currentUser }) {
 
   const [expandedId, setExpandedId] = useState(null);
   const [receivingPo, setReceivingPo] = useState(null);
+  const [logPo, setLogPo] = useState(null);
   const [showBulkUpload, setShowBulkUpload] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -620,6 +622,7 @@ export default function PurchaseOrders({ currentUser }) {
           const badge = STATUS_STYLES[po.status] || { bg: "#f1f2f6", color: "#4a4d5c" };
           const isExpanded = expandedId === po.id;
           const hasPending = items.some((it) => Number(it.qty_received) < Number(it.qty_ordered));
+          const hasReceived = items.some((it) => Number(it.qty_received) > 0);
           return (
             <div className="po-card" key={po.id}>
               <div className="po-card-top">
@@ -631,6 +634,9 @@ export default function PurchaseOrders({ currentUser }) {
                     <button className="po-receive-btn" onClick={() => setReceivingPo(po)}>
                       <PackageCheck size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Receive
                     </button>
+                  )}
+                  {hasReceived && (
+                    <button className="po-icon-btn" title="Receiving History" onClick={() => setLogPo(po)}><ClipboardList size={14} /></button>
                   )}
                   <button className="po-icon-btn" title="Edit PO" onClick={() => startEditPo(po)}><Pencil size={14} /></button>
                   <button className="po-icon-btn" title="Print / PDF" onClick={() => handlePrint(po)}><Printer size={14} /></button>
@@ -648,7 +654,7 @@ export default function PurchaseOrders({ currentUser }) {
               {isExpanded && (
                 <table className="po-items-table">
                   <thead>
-                    <tr><th>Item Code</th><th>Material</th><th>UOM</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">Rate</th><th className="num">Amount</th></tr>
+                    <tr><th>Item Code</th><th>Material</th><th>UOM</th><th className="num">Ordered</th><th className="num">Received</th><th>Last Received On</th><th className="num">Rate</th><th className="num">Amount</th></tr>
                   </thead>
                   <tbody>
                     {items.map((it) => (
@@ -658,6 +664,7 @@ export default function PurchaseOrders({ currentUser }) {
                         <td>{it.material?.unit || "-"}</td>
                         <td className="num">{it.qty_ordered}</td>
                         <td className="num" style={{ color: Number(it.qty_received) < Number(it.qty_ordered) ? "#c23c33" : "#1a8a4c", fontWeight: 700 }}>{it.qty_received}</td>
+                        <td>{Number(it.qty_received) > 0 ? fmtDate(it.last_received_at) : "-"}</td>
                         <td className="num">₹{Number(it.rate).toFixed(2)}</td>
                         <td className="num">₹{Number(it.amount).toFixed(2)}</td>
                       </tr>
@@ -677,6 +684,10 @@ export default function PurchaseOrders({ currentUser }) {
           onClose={() => setReceivingPo(null)}
           onDone={() => { setReceivingPo(null); load(); }}
         />
+      )}
+
+      {logPo && (
+        <ReceiptLogModal po={logPo} onClose={() => setLogPo(null)} />
       )}
 
       {showBulkUpload && (
