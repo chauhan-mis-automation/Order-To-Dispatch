@@ -1,1 +1,62 @@
 @import "tailwindcss";
+
+/* ───────────── Motion system (shared by Dashboard + Reports) ───────────── */
+
+/* NOTE: fill-mode is "backwards" on purpose — "both" would keep transform/filter
+   applied forever, breaking :hover transforms and position:fixed modals. */
+
+/* Cards / blocks rising in, staggered via style={{ "--i": index }} */
+@keyframes fx-rise {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.fx-rise {
+  animation: fx-rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+/* Whole page entering when the sidebar view changes */
+@keyframes fx-page {
+  from { opacity: 0; transform: translateY(10px); filter: blur(3px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+.fx-page { animation: fx-page 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+
+/* Table rows / list rows sliding in one after another */
+@keyframes fx-row {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: none; }
+}
+.fx-row {
+  animation: fx-row 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+
+/* Progress / ranking bars growing from the left */
+@keyframes fx-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.fx-grow {
+  transform-origin: left center;
+  animation: fx-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 80ms + 250ms);
+}
+
+/* Soft pulse for "alert" numbers (low stock, rejection, short deliveries) */
+@keyframes fx-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(194, 60, 51, 0); }
+  50%      { box-shadow: 0 0 0 6px rgba(194, 60, 51, 0.12); }
+}
+.fx-pulse { animation: fx-pulse 2.2s ease-in-out infinite; }
+
+/* Circular wipe (View Transitions API) — origin is set from JS */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-rise, .fx-page, .fx-row, .fx-grow, .fx-pulse { animation: none !important; }
+}

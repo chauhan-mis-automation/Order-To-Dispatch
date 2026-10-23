@@ -199,7 +199,7 @@ function App() {
       isAdmin={isAdmin}
       canAccess={canAccess}
     >
-      {pageContent}
+      <div key={activeView} className="fx-page">{pageContent}</div>
     </Sidebar>
   );
 }
