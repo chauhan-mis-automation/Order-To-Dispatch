@@ -60,11 +60,14 @@ export default function PurchaseOrders({ currentUser }) {
   const [uploadingFile, setUploadingFile] = useState(false);
 
   const [uomList, setUomList] = useState([]);
+  const [sections, setSections] = useState([]);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [newMatName, setNewMatName] = useState("");
   const [newMatCategory, setNewMatCategory] = useState("Raw Material");
   const [newMatUom, setNewMatUom] = useState("");
+  const [newMatSection, setNewMatSection] = useState("");
   const [newUomInput, setNewUomInput] = useState("");
+  const [newSectionInput, setNewSectionInput] = useState("");
   const [addingMaterial, setAddingMaterial] = useState(false);
   const [addMaterialError, setAddMaterialError] = useState("");
 
@@ -80,13 +83,15 @@ export default function PurchaseOrders({ currentUser }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
-    const [matRes, poRes, uomRes] = await Promise.all([
+    const [matRes, poRes, uomRes, sectionRes] = await Promise.all([
       supabase.from("raw_materials").select("*").order("name"),
       supabase.from("purchase_orders").select("*").order("created_at", { ascending: false }),
       supabase.from("uom_master").select("name").order("sequence"),
+      supabase.from("section_master").select("name").order("sequence"),
     ]);
     setMaterials(matRes.data || []);
     setUomList((uomRes.data || []).map((u) => u.name));
+    setSections((sectionRes.data || []).map((s) => s.name));
     if (poRes.error) setError(poRes.error.message);
     else setPos(poRes.data || []);
 
@@ -161,6 +166,19 @@ export default function PurchaseOrders({ currentUser }) {
     }
   }
 
+  async function addSection() {
+    if (!newSectionInput.trim()) return;
+    try {
+      const { error: err } = await supabase.from("section_master").insert({ name: newSectionInput.trim(), sequence: sections.length + 1 });
+      if (err && err.code !== "23505") throw err;
+      setNewMatSection(newSectionInput.trim());
+      setNewSectionInput("");
+      load();
+    } catch (err) {
+      setAddMaterialError(err.message);
+    }
+  }
+
   async function addNewMaterial(e) {
     e.preventDefault();
     if (!newMatName.trim() || !newMatUom) {
@@ -173,7 +191,7 @@ export default function PurchaseOrders({ currentUser }) {
       const item_code = await nextRmItemCode(newMatCategory);
       const { data: matRow, error: matErr } = await supabase
         .from("raw_materials")
-        .insert({ item_code, name: newMatName.trim(), unit: newMatUom, category: newMatCategory })
+        .insert({ item_code, name: newMatName.trim(), unit: newMatUom, category: newMatCategory, section: newMatSection || null })
         .select()
         .single();
       if (matErr) throw matErr;
@@ -191,7 +209,7 @@ export default function PurchaseOrders({ currentUser }) {
         }
         return [...prev, { ...emptyLineItem(), materialName: newMatName.trim() }];
       });
-      setNewMatName(""); setNewMatCategory("Raw Material"); setNewMatUom("");
+      setNewMatName(""); setNewMatCategory("Raw Material"); setNewMatUom(""); setNewMatSection("");
       setShowAddMaterial(false);
     } catch (err) {
       setAddMaterialError(err.message);
@@ -520,6 +538,17 @@ export default function PurchaseOrders({ currentUser }) {
                 <div className="po-quickadd-uom">
                   <input value={newUomInput} onChange={(e) => setNewUomInput(e.target.value)} placeholder="+ new unit" />
                   <button type="button" onClick={addUom}><Plus size={12} /></button>
+                </div>
+              </div>
+              <div>
+                <label>Section / Department</label>
+                <select value={newMatSection} onChange={(e) => setNewMatSection(e.target.value)}>
+                  <option value="">- Select Section -</option>
+                  {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <div className="po-quickadd-uom">
+                  <input value={newSectionInput} onChange={(e) => setNewSectionInput(e.target.value)} placeholder="+ new section" />
+                  <button type="button" onClick={addSection}><Plus size={12} /></button>
                 </div>
               </div>
             </div>

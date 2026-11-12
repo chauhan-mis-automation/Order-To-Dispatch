@@ -53,17 +53,18 @@ export default function DispatchModal({ order, currentUser, requireLogin, onClos
       });
       setAlreadyDispatchedMap(dispatchedMap);
 
-      // default "dispatching now" qty = whatever's still remaining for each item
+      // "dispatching now" starts blank (0) for each item — the user types in
+      // how much is actually going out in this shipment, rather than it
+      // being pre-filled with the full remaining/pending quantity.
       const builtRows = items
         .map((item) => {
           const key = keyFor(item.item_name, item.brand, item.size, item.thickness);
           const ordered = Number(item.qty) || 0;
           const already = dispatchedMap[key] || 0;
-          const remaining = Math.max(0, ordered - already);
           return {
             id: newId(),
             itemName: item.item_name, brand: item.brand, size: item.size, thickness: item.thickness,
-            ordered, already, qty: remaining,
+            ordered, already, qty: 0,
             na: "0.000", weightTon: "0.000", sqMtr: "0.00",
             shade: item.shade || "", model: item.model || "", remark: "",
           };

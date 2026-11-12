@@ -117,6 +117,25 @@ export default function GridOrderEntry({ master, qtyMatrix, setQtyMatrix, varian
   const [newThickness, setNewThickness] = useState("");
   const [addError, setAddError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [modelPopup, setModelPopup] = useState(null); // { itemName, blockId } currently adding a model for
+  const [newModelValue, setNewModelValue] = useState("");
+  const [modelPopupError, setModelPopupError] = useState("");
+  const [savingModel, setSavingModel] = useState(false);
+
+  async function saveNewModel() {
+    if (!modelPopup || !newModelValue.trim()) return;
+    setSavingModel(true);
+    setModelPopupError("");
+    const res = await master.addModel(modelPopup.itemName, newModelValue.trim());
+    setSavingModel(false);
+    if (!res.success) {
+      setModelPopupError(res.message || "Failed to add model");
+      return;
+    }
+    updateBlockField(modelPopup.itemName, modelPopup.blockId, "model", newModelValue.trim());
+    setModelPopup(null);
+    setNewModelValue("");
+  }
 
   const items = useMemo(() => {
     const raw = (master.items || []).filter((n) => !HIDDEN_ITEMS.has(norm(n)));
@@ -358,6 +377,21 @@ export default function GridOrderEntry({ master, qtyMatrix, setQtyMatrix, varian
         .goe-add-model-btn { border: 1px dashed #cfd2de; background: #fff; color: #4a4d5c; border-radius: 8px; padding: 7px 12px; font-weight: 700; font-size: 11.5px; cursor: pointer; display: flex; align-items: center; gap: 5px; }
         .goe-add-model-btn:hover { background: #f6f7fb; }
 
+        .goe-model-add-btn { border: 1px solid #1a8a4c; background: #eafaf1; color: #1a8a4c; border-radius: 7px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+        .goe-model-add-btn:hover { background: #d7f3e3; }
+
+        .goe-modal-overlay { position: fixed; inset: 0; background: rgba(12,13,20,0.5); backdrop-filter: blur(3px); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; animation: goe-fade 0.15s ease; }
+        @keyframes goe-fade { from { opacity: 0; } to { opacity: 1; } }
+        .goe-modal { width: 100%; max-width: 360px; background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 24px 60px rgba(10,11,20,0.3); }
+        .goe-modal-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14px; color: #1c1e26; margin-bottom: 12px; }
+        .goe-modal-input { width: 100%; border: 1px solid #e1e3ec; border-radius: 9px; padding: 9px 12px; font-size: 13px; box-sizing: border-box; }
+        .goe-modal-input:focus { outline: none; border-color: #1a8a4c; }
+        .goe-modal-error { color: #c23c33; font-size: 11.5px; margin-top: 8px; }
+        .goe-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+        .goe-modal-cancel { border: 1px solid #e1e3ec; background: #fff; color: #5b5f72; border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 12px; cursor: pointer; }
+        .goe-modal-save { border: none; background: #1a8a4c; color: #fff; border-radius: 8px; padding: 8px 16px; font-weight: 700; font-size: 12px; cursor: pointer; }
+        .goe-modal-save:disabled { opacity: 0.6; cursor: not-allowed; }
+
         .goe-grand { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
         @media (max-width: 560px) { .goe-grand { grid-template-columns: 1fr; } }
         .goe-grand-box { background: #fff; border: 2px solid #1a8a4c33; border-radius: 12px; padding: 14px; text-align: center; }
@@ -480,6 +514,14 @@ export default function GridOrderEntry({ master, qtyMatrix, setQtyMatrix, varian
                             <option value="">- Select Model -</option>
                             {models.map((m) => <option key={m} value={m}>{m}</option>)}
                           </select>
+                          <button
+                            type="button"
+                            className="goe-model-add-btn"
+                            title="Add a new model number"
+                            onClick={() => { setModelPopup({ itemName, blockId: block.id }); setNewModelValue(""); setModelPopupError(""); }}
+                          >
+                            <Plus size={13} />
+                          </button>
                         </>
                       )}
                       {showShade && (
@@ -529,6 +571,29 @@ export default function GridOrderEntry({ master, qtyMatrix, setQtyMatrix, varian
         <div className="goe-grand-box"><div className="goe-grand-label">Grand Total NA</div><div className="goe-grand-value">{grandTotal.na.toFixed(3)}</div></div>
         <div className="goe-grand-box"><div className="goe-grand-label">Grand Total TON</div><div className="goe-grand-value">{grandTotal.ton.toFixed(3)}</div></div>
       </div>
+
+      {modelPopup && (
+        <div className="goe-modal-overlay" onClick={() => !savingModel && setModelPopup(null)}>
+          <div className="goe-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="goe-modal-title">Add New Model — {modelPopup.itemName}</div>
+            <input
+              className="goe-modal-input"
+              value={newModelValue}
+              onChange={(e) => setNewModelValue(e.target.value)}
+              placeholder="e.g. EMD-54"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") saveNewModel(); }}
+            />
+            {modelPopupError && <div className="goe-modal-error">{modelPopupError}</div>}
+            <div className="goe-modal-actions">
+              <button className="goe-modal-cancel" onClick={() => setModelPopup(null)} disabled={savingModel}>Cancel</button>
+              <button className="goe-modal-save" onClick={saveNewModel} disabled={savingModel || !newModelValue.trim()}>
+                {savingModel ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

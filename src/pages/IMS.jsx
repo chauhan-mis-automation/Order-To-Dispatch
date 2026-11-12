@@ -46,7 +46,7 @@ async function nextFgId(itemName) {
 
 const emptyForm = {
   type: "Raw Material", // "Raw Material" | "Finished Good" (special)
-  name: "", category: "Raw Material", unit: "",
+  name: "", category: "Raw Material", unit: "", section: "",
   itemName: "", brand: "", size: "", thickness: "", fgName: "",
   qty: "", min: "", max: "", location: "", remarks: "",
 };
@@ -62,6 +62,7 @@ export default function IMS() {
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
   const [viewTab, setViewTab] = useState("inventory"); // "inventory" | "log"
 
   const [sections, setSections] = useState([]); // section_master names
@@ -99,7 +100,7 @@ export default function IMS() {
     setLoading(true);
     setError("");
     const [rmRes, fgRes, poItemsRes, dispatchRes, issueRes, sectionRes, uomRes] = await Promise.all([
-      supabase.from("rm_stock").select("*, raw_materials(id, name, unit, item_code, category)").order("id"),
+      supabase.from("rm_stock").select("*, raw_materials(id, name, unit, item_code, category, section)").order("id"),
       supabase.from("fg_stock").select("*").order("item_name"),
       supabase.from("purchase_order_items").select("*").gt("qty_received", 0),
       supabase.from("dispatch_logs").select("*"),
@@ -121,17 +122,19 @@ export default function IMS() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function addSection() {
+  async function addSection(target = "issue") {
     if (!newSectionInput.trim()) return;
     setAddingSection(true);
     try {
       const { error: err } = await supabase.from("section_master").insert({ name: newSectionInput.trim(), sequence: sections.length + 1 });
       if (err && err.code !== "23505") throw err;
-      setIssueSection(newSectionInput.trim());
+      if (target === "form") updateForm("section", newSectionInput.trim());
+      else setIssueSection(newSectionInput.trim());
       setNewSectionInput("");
       load();
     } catch (err) {
-      setIssueError(err.message);
+      if (target === "form") setError(err.message);
+      else setIssueError(err.message);
     } finally {
       setAddingSection(false);
     }
@@ -206,6 +209,7 @@ export default function IMS() {
       code: r.raw_materials?.item_code || "-",
       name: r.raw_materials?.name || "Unknown",
       category: r.raw_materials?.category || "-",
+      section: r.raw_materials?.section || "",
       specs: "-",
       unit: r.raw_materials?.unit || "-",
       qty: Number(r.qty_available) || 0,
@@ -222,6 +226,7 @@ export default function IMS() {
       code: r.fg_id || "-",
       name: r.item_name,
       category: "Finished Goods",
+      section: "",
       specs: `${r.brand || "-"}, ${r.size}, ${r.thickness}`,
       unit: "pcs",
       qty: Number(r.qty_available) || 0,
@@ -239,6 +244,7 @@ export default function IMS() {
   const filteredRows = useMemo(() => {
     return unifiedRows.filter((row) => {
       if (categoryFilter && row.category !== categoryFilter) return false;
+      if (sectionFilter && row.section !== sectionFilter) return false;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         const hay = `${row.code} ${row.name} ${row.specs}`.toLowerCase();
@@ -246,7 +252,7 @@ export default function IMS() {
       }
       return true;
     });
-  }, [unifiedRows, categoryFilter, search]);
+  }, [unifiedRows, categoryFilter, sectionFilter, search]);
 
   const filteredLog = useMemo(() => {
     return issueLog.filter((i) => {
@@ -283,7 +289,7 @@ export default function IMS() {
         const item_code = await nextRmItemCode(form.category);
         const { data: matRow, error: matErr } = await supabase
           .from("raw_materials")
-          .insert({ item_code, name: form.name.trim(), unit: form.unit.trim(), category: form.category })
+          .insert({ item_code, name: form.name.trim(), unit: form.unit.trim(), category: form.category, section: form.section || null })
           .select()
           .single();
         if (matErr) throw matErr;
@@ -333,7 +339,7 @@ export default function IMS() {
     setEditForm({
       qty: String(row.qty), min: String(row.min), max: String(row.max),
       location: row.location, remarks: row.remarks,
-      name: row.name, category: row.category,
+      name: row.name, category: row.category, section: row.section || "",
     });
   }
 
@@ -358,7 +364,7 @@ export default function IMS() {
     if (row.kind === "RM" && row.materialId) {
       const { error: matErr } = await supabase
         .from("raw_materials")
-        .update({ name: editForm.name.trim(), category: editForm.category })
+        .update({ name: editForm.name.trim(), category: editForm.category, section: editForm.section || null })
         .eq("id", row.materialId);
       if (matErr) {
         setError(matErr.message);
@@ -529,6 +535,9 @@ export default function IMS() {
             <div className="ims-cat-select">
               <ComboBox value={categoryFilter} onChange={setCategoryFilter} options={ALL_CATEGORIES} placeholder="All Categories" />
             </div>
+            <div className="ims-cat-select">
+              <ComboBox value={sectionFilter} onChange={setSectionFilter} options={sections} placeholder="All Sections" />
+            </div>
           </>
         )}
         {viewTab === "log" && (
@@ -642,6 +651,17 @@ export default function IMS() {
                   <button type="button" onClick={addUom} disabled={addingUom}><Plus size={12} /></button>
                 </div>
               </div>
+              <div className="ims-form-field">
+                <label>Section / Department</label>
+                <select value={form.section} onChange={(e) => updateForm("section", e.target.value)}>
+                  <option value="">- Select Section -</option>
+                  {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <div className="ims-quick-add">
+                  <input value={newSectionInput} onChange={(e) => setNewSectionInput(e.target.value)} placeholder="+ new section" />
+                  <button type="button" onClick={() => addSection("form")} disabled={addingSection}><Plus size={12} /></button>
+                </div>
+              </div>
               <div className="ims-form-field"><label>Opening Qty</label><input type="number" value={form.qty} onChange={(e) => updateForm("qty", e.target.value)} placeholder="0" /></div>
               <div className="ims-form-field"><label>Min Stock</label><input type="number" value={form.min} onChange={(e) => updateForm("min", e.target.value)} placeholder="0" /></div>
               <div className="ims-form-field"><label>Max Stock</label><input type="number" value={form.max} onChange={(e) => updateForm("max", e.target.value)} placeholder="0" /></div>
@@ -682,7 +702,7 @@ export default function IMS() {
           <table className="ims-table">
             <thead>
               <tr>
-                <th>Type</th><th>Code</th><th>Name</th><th>Category / Specs</th><th>UOM</th>
+                <th>Type</th><th>Code</th><th>Name</th><th>Category / Specs</th><th>Section</th><th>UOM</th>
                 <th>Closing Stock</th><th>Activity</th><th>Consumption</th><th>Min</th><th>Max</th><th>Status</th>
                 <th>Location</th><th>Remarks</th><th></th>
               </tr>
@@ -709,6 +729,16 @@ export default function IMS() {
                         <span className="ims-cat-badge">{row.category}</span>
                       ) : (
                         <span className="ims-specs">{row.specs}</span>
+                      )}
+                    </td>
+                    <td>
+                      {isEditing && row.kind === "RM" ? (
+                        <select className="ims-edit-input wide" value={editForm.section} onChange={(e) => setEditForm((f) => ({ ...f, section: e.target.value }))}>
+                          <option value="">-</option>
+                          {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : (
+                        row.section ? <span className="ims-cat-badge">{row.section}</span> : <span style={{ color: "#c3c5d1" }}>-</span>
                       )}
                     </td>
                     <td>{row.unit}</td>

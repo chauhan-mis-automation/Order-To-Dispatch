@@ -115,5 +115,32 @@ export function useMasterData() {
     []
   );
 
-  return { ...data, loading, error, refresh: fetchAll, addNew };
+  const addModel = useCallback(async (itemName, modelNumber) => {
+    const item = String(itemName || "").trim();
+    const model = String(modelNumber || "").trim();
+    if (!item || !model) return { success: false, message: "Model number can't be empty" };
+
+    const { error: insertError } = await supabase
+      .from("item_models")
+      .insert({ item_name: item, model_number: model });
+
+    // duplicate (unique constraint) isn't a real failure — model already exists
+    if (insertError && insertError.code !== "23505") {
+      return { success: false, message: insertError.message };
+    }
+
+    const key = item.toUpperCase();
+    setData((prev) => {
+      const list = prev.modelsByItem[key] || [];
+      if (list.includes(model)) return prev;
+      return {
+        ...prev,
+        modelsByItem: { ...prev.modelsByItem, [key]: [...list, model].sort() },
+      };
+    });
+
+    return { success: true, message: "Added!" };
+  }, []);
+
+  return { ...data, loading, error, refresh: fetchAll, addNew, addModel };
 }
