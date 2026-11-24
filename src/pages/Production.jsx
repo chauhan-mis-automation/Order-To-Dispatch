@@ -10,6 +10,7 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
+import DailySheet from "./DailySheet";
 
 const DEPARTMENTS = ["Plywood", "Door", "Furniture"];
 const SHIFTS = ["Shift 1 (6AM-2PM)", "Shift 2 (2PM-10PM)", "Shift 3 (10PM-6AM)"];
@@ -30,9 +31,7 @@ function departmentForItem(itemName) {
 }
 const TABS = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "entry", label: "Daily Entry", icon: ClipboardList },
-  { id: "report", label: "Production Sheet", icon: Table2 },
-  { id: "target", label: "Target Master", icon: Settings2 },
+  { id: "daily", label: "Daily Sheet", icon: Table2 },
 ];
 
 function todayStr() { return new Date().toISOString().split("T")[0]; }
@@ -121,9 +120,7 @@ export default function Production({ currentUser }) {
       ) : (
         <>
           {activeTab === "dashboard" && <DashboardTab joinedRows={joinedRows} targets={targets} />}
-          {activeTab === "entry" && <EntryTab targets={targets} stages={stages} currentUser={currentUser} onSaved={load} />}
-          {activeTab === "report" && <ReportTab joinedRows={joinedRows} />}
-          {activeTab === "target" && <TargetTab targets={targets} stages={stages} onChanged={load} />}
+          {activeTab === "daily" && <DailySheet currentUser={currentUser} />}
         </>
       )}
     </div>

@@ -9,6 +9,8 @@ import { CountUp } from "../components/ui/motion";
 import { ChartCard, DonutChart, TrendChart, BarCompare, RankBars } from "../components/ui/charts";
 import { PALETTE } from "../components/ui/chartTheme";
 import { wipe } from "../utils/wipe";
+import { calc, PROD_TYPES, fetchDailyProduction } from "./DailySheet";
+import { BLOCKS } from "../lib/productionBlocks";
 
 function fmtDate(d) {
   if (!d) return "-";
@@ -54,7 +56,7 @@ const STATUS_CHART_COLORS = {
 
 const REPORT_CARDS = [
   { id: "orders", label: "Order Report", icon: Package, color: "#1d5fc7", bg: "#e8f1ff", desc: "Every order — status, party, qty, weight" },
-  { id: "production", label: "Production Report", icon: Factory, color: "#b5620f", bg: "#fff4de", desc: "Target vs Actual across stages" },
+  { id: "production", label: "Production Report", icon: Factory, color: "#b5620f", bg: "#fff4de", desc: "PCS, F.A., N.A., CBM, Glueline from Daily Sheet" },
   { id: "inventory", label: "Inventory Report", icon: Layers, color: "#8b3fd6", bg: "#f3e8ff", desc: "RM + FG stock, low-stock items" },
   { id: "purchase", label: "Purchase Report", icon: ShoppingCart, color: "#1a8a4c", bg: "#eafaf1", desc: "POs, vendors, spend, pending receipts" },
   { id: "dispatch", label: "Dispatch Report", icon: Truck, color: "#c23c33", bg: "#fdeceb", desc: "Dispatched vs ordered, variance" },
@@ -288,123 +290,150 @@ function OrderReport() {
 }
 
 /* ============================== PRODUCTION REPORT ============================== */
+// Built from the Daily Sheet data (daily_production): PCS entered per size/type,
+// with F.A., N.A., CBM and Glueline calculated using the same formulas as the client's Excel.
+const PROD_TYPE_LABEL = Object.fromEntries(PROD_TYPES.map((t) => [t.id, t.label]));
+const PROD_NAME = { BB: "Block Board", FD: "Flush Door", PLY: "Plywood" };
+const nf = (n, d = 2) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: d });
+
 function ProductionReport() {
-  const [targets, setTargets] = useState([]);
-  const [logs, setLogs] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [customSizes, setCustomSizes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [department, setDepartment] = useState("");
+  const [product, setProduct] = useState("");
+  const [shift, setShift] = useState("");
+  const [ptype, setPtype] = useState("");
 
   useEffect(() => {
     async function load() {
-      setLoading(true);
-      const [tRes, lRes] = await Promise.all([
-        supabase.from("target_master").select("*"),
-        supabase.from("production_log").select("*").order("entry_date", { ascending: false }),
+      setLoading(true); setError("");
+      const [pRes, cRes] = await Promise.all([
+        fetchDailyProduction(),
+        supabase.from("production_custom_sizes").select("*"),
       ]);
-      setTargets(tRes.data || []);
-      setLogs(lRes.data || []);
+      if (pRes.error) setError(pRes.error.message);
+      setRows(pRes.data || []);
+      setCustomSizes(cRes.data || []);
       setLoading(false);
     }
     load();
   }, []);
 
-  const departments = useMemo(() => [...new Set(logs.map((l) => l.department))], [logs]);
+  // length/width (m) for every known size: Excel sizes + sizes added in the app
+  const dims = useMemo(() => {
+    const m = {};
+    BLOCKS.forEach((b) => b.sizes.forEach((s) => { m[`${b.product}|${Number(b.thickness)}|${s.size}`] = s; }));
+    customSizes.forEach((c) => { m[`${c.product}|${Number(c.thickness)}|${c.size}`] = { l: Number(c.l), w: Number(c.w) }; });
+    return m;
+  }, [customSizes]);
 
-  const joined = useMemo(() => {
-    return logs.map((l) => {
-      const t = targets.find((x) => x.department === l.department && x.product === l.product && x.stage === l.stage);
-      const target = t?.daily_target || 0;
-      const balance = Number(l.actual_qty) - target;
-      return { ...l, target, unit: t?.unit || "", balance, achievement: pct(l.actual_qty, target) };
+  const enriched = useMemo(() => rows.map((r) => {
+    const d = dims[`${r.product}|${Number(r.thickness)}|${r.size}`];
+    if (!d) return null;
+    return { ...r, thickness: Number(r.thickness), ...calc(r.product, Number(r.thickness), d.l, d.w, r.pcs, r.prod_type) };
+  }).filter(Boolean), [rows, dims]);
+
+  const filtered = useMemo(() => enriched.filter((r) => {
+    if (fromDate && r.entry_date < fromDate) return false;
+    if (toDate && r.entry_date > toDate) return false;
+    if (product && r.product !== product) return false;
+    if (shift && r.shift !== shift) return false;
+    if (ptype && r.prod_type !== ptype) return false;
+    return true;
+  }), [enriched, fromDate, toDate, product, shift, ptype]);
+
+  const totals = useMemo(() => filtered.reduce((a, r) => ({
+    pcs: a.pcs + r.pcs, fa: a.fa + r.fa, na: a.na + r.na, cbm: a.cbm + r.cbm, glue: a.glue + r.glue,
+    refacing: a.refacing + (/REFACING/.test(r.prod_type) ? r.pcs : 0),
+  }), { pcs: 0, fa: 0, na: 0, cbm: 0, glue: 0, refacing: 0 }), [filtered]);
+
+  // table: one line per date / shift / product-thickness / type (sizes added together)
+  const table = useMemo(() => {
+    const m = {};
+    filtered.forEach((r) => {
+      const k = `${r.entry_date}|${r.shift}|${r.product}|${r.thickness}|${r.prod_type}`;
+      const t = (m[k] ||= { key: k, entry_date: r.entry_date, shift: r.shift, product: r.product, thickness: r.thickness, prod_type: r.prod_type, pcs: 0, fa: 0, na: 0, cbm: 0, glue: 0 });
+      t.pcs += r.pcs; t.fa += r.fa; t.na += r.na; t.cbm += r.cbm; t.glue += r.glue;
     });
-  }, [logs, targets]);
-
-  const filtered = useMemo(() => {
-    return joined.filter((r) => {
-      if (fromDate && r.entry_date < fromDate) return false;
-      if (toDate && r.entry_date > toDate) return false;
-      if (department && r.department !== department) return false;
-      return true;
-    });
-  }, [joined, fromDate, toDate, department]);
-
-  const totals = useMemo(() => ({
-    target: filtered.reduce((s, r) => s + r.target, 0),
-    actual: filtered.reduce((s, r) => s + Number(r.actual_qty), 0),
-    rejection: filtered.reduce((s, r) => s + Number(r.rejection_qty), 0),
-  }), [filtered]);
-  const achievement = pct(totals.actual, totals.target);
+    return Object.values(m).sort((a, b) => b.entry_date.localeCompare(a.entry_date) || a.shift.localeCompare(b.shift) || a.product.localeCompare(b.product) || a.thickness - b.thickness);
+  }, [filtered]);
 
   const charts = useMemo(() => {
-    const byDept = {}, byDate = {}, byStage = {};
+    const byProd = {}, byDate = {}, byType = {};
     filtered.forEach((r) => {
-      const d = (byDept[r.department] ||= { name: r.department, Target: 0, Actual: 0 });
-      d.Target += r.target; d.Actual += Number(r.actual_qty) || 0;
-      const t = (byDate[r.entry_date] ||= { raw: r.entry_date, Target: 0, Actual: 0 });
-      t.Target += r.target; t.Actual += Number(r.actual_qty) || 0;
-      const st = (byStage[r.stage || "-"] ||= { target: 0, actual: 0 });
-      st.target += r.target; st.actual += Number(r.actual_qty) || 0;
+      const p = (byProd[r.product] ||= { name: PROD_NAME[r.product] || r.product, Day: 0, Night: 0 });
+      p[r.shift === "NIGHT" ? "Night" : "Day"] += r.pcs;
+      const d = (byDate[r.entry_date] ||= { raw: r.entry_date, Day: 0, Night: 0 });
+      d[r.shift === "NIGHT" ? "Night" : "Day"] += r.pcs;
+      byType[r.prod_type] = (byType[r.prod_type] || 0) + r.pcs;
     });
     return {
-      dept: Object.values(byDept),
-      daily: Object.values(byDate).sort((a, b) => String(a.raw).localeCompare(String(b.raw))).map((x) => ({ ...x, date: shortDate(x.raw) })),
-      stages: Object.entries(byStage)
-        .filter(([, v]) => v.target > 0)
-        .map(([name, v]) => ({ name, value: Number(((v.actual / v.target) * 100).toFixed(1)) }))
-        .sort((a, b) => b.value - a.value).slice(0, 8),
+      prod: Object.values(byProd),
+      daily: Object.values(byDate).sort((a, b) => a.raw.localeCompare(b.raw)).map((x) => ({ ...x, date: shortDate(x.raw) })),
+      types: Object.entries(byType).map(([k, v]) => ({ name: PROD_TYPE_LABEL[k] || k, value: v })).sort((a, b) => b.value - a.value),
     };
   }, [filtered]);
 
   return (
     <div>
       <div className="rpt-filters">
-        <select value={department} onChange={(e) => setDepartment(e.target.value)}>
-          <option value="">All Departments</option>
-          {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+        <select value={product} onChange={(e) => setProduct(e.target.value)}>
+          <option value="">All Products</option>
+          {Object.entries(PROD_NAME).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={shift} onChange={(e) => setShift(e.target.value)}>
+          <option value="">Day + Night</option><option value="DAY">Day</option><option value="NIGHT">Night</option>
+        </select>
+        <select value={ptype} onChange={(e) => setPtype(e.target.value)}>
+          <option value="">All Types</option>
+          {PROD_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
         <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
         <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
       </div>
 
+      {error && <div className="rpt-empty" style={{ color: "#c23c33" }}>{error}</div>}
+
       <div className="rpt-cards">
-        <StatCard i={0} label="Total Target" value={totals.target} />
-        <StatCard i={1} label="Total Actual" value={totals.actual} color="#1a8a4c" />
-        <StatCard i={2} label="Achievement %" value={achievement} decimals={1} suffix="%" color="#1d5fc7" />
-        <StatCard i={3} label="Total Rejection" value={totals.rejection} color="#c23c33" alert />
+        <StatCard i={0} label="Total PCS" value={totals.pcs} />
+        <StatCard i={1} label="Total F.A." value={totals.fa} decimals={2} color="#1a8a4c" />
+        <StatCard i={2} label="Total N.A." value={totals.na} decimals={2} color="#1d5fc7" />
+        <StatCard i={3} label="Total CBM" value={totals.cbm} decimals={3} color="#8b3fd6" />
+        <StatCard i={4} label="Total Glueline" value={totals.glue} decimals={2} color="#b5620f" />
+        <StatCard i={5} label="Refacing PCS" value={totals.refacing} />
       </div>
 
       <div className="rpt-charts">
-        <ChartCard title="Target vs Actual by Department" icon={BarChart3} color={PALETTE.blue} delay={4}>
-          <BarCompare data={charts.dept} xKey="name" series={[{ key: "Target", name: "Target", color: "#cbd5f5" }, { key: "Actual", name: "Actual", color: PALETTE.green }]} />
+        <ChartCard title="PCS by Product (Day vs Night)" icon={BarChart3} color={PALETTE.blue} delay={4}>
+          <BarCompare data={charts.prod} xKey="name" series={[{ key: "Day", name: "Day", color: PALETTE.amber }, { key: "Night", name: "Night", color: PALETTE.blue }]} />
         </ChartCard>
-        <ChartCard title="Daily Target vs Actual" icon={TrendingUp} color={PALETTE.green} delay={5}>
-          <TrendChart data={charts.daily} xKey="date" series={[{ key: "Target", name: "Target", color: PALETTE.slate }, { key: "Actual", name: "Actual", color: PALETTE.green }]} />
+        <ChartCard title="Daily PCS" icon={TrendingUp} color={PALETTE.green} delay={5}>
+          <TrendChart data={charts.daily} xKey="date" series={[{ key: "Day", name: "Day", color: PALETTE.amber }, { key: "Night", name: "Night", color: PALETTE.blue }]} />
         </ChartCard>
-        <ChartCard title="Achievement % by Stage" icon={PieIcon} color={PALETTE.amber} delay={6}>
-          <RankBars data={charts.stages} nameKey="name" valueKey="value" color={PALETTE.amber} valueFormatter={(v) => `${v}%`} emptyText="No targets set for these stages." />
+        <ChartCard title="PCS by Production Type" icon={PieIcon} color={PALETTE.amber} delay={6}>
+          <RankBars data={charts.types} nameKey="name" valueKey="value" color={PALETTE.amber} valueFormatter={(v) => nf(v, 0)} emptyText="No production entered yet." />
         </ChartCard>
       </div>
 
-      <div className="rpt-count">{filtered.length} record(s)</div>
+      <div className="rpt-count">{table.length} line(s)</div>
 
       <div className="rpt-table-wrap">
         {loading ? (
           <div className="rpt-loading"><Loader2 size={20} className="rpt-spin" /></div>
-        ) : filtered.length === 0 ? (
+        ) : table.length === 0 ? (
           <div className="rpt-empty">No production records match this filter.</div>
         ) : (
           <table className="rpt-table">
-            <thead><tr><th>Date</th><th>Shift</th><th>Department</th><th>Product</th><th>Stage</th><th>Target</th><th>Actual</th><th>Balance</th><th>Achievement %</th><th>Rejection</th></tr></thead>
+            <thead><tr><th>Date</th><th>Shift</th><th>Product</th><th>Thickness</th><th>Type</th><th>PCS</th><th>F.A.</th><th>N.A.</th><th>CBM</th><th>Glueline</th></tr></thead>
             <tbody>
-              {filtered.map((r, idx) => (
-                <tr key={r.id} className="fx-row" style={{ "--i": Math.min(idx, 14) }}>
-                  <td>{fmtDate(r.entry_date)}</td><td>{r.shift || "-"}</td><td>{r.department}</td><td>{r.product}</td><td>{r.stage}</td>
-                  <td>{r.target} {r.unit}</td><td>{r.actual_qty} {r.unit}</td>
-                  <td className={r.balance < 0 ? "rpt-bad" : "rpt-good"}>{r.balance > 0 ? `+${r.balance}` : r.balance}</td>
-                  <td className={r.achievement !== null && r.achievement < 90 ? "rpt-bad" : "rpt-good"}>{r.achievement === null ? "-" : `${r.achievement.toFixed(1)}%`}</td>
-                  <td>{r.rejection_qty}</td>
+              {table.map((r, idx) => (
+                <tr key={r.key} className="fx-row" style={{ "--i": Math.min(idx, 14) }}>
+                  <td>{fmtDate(r.entry_date)}</td><td>{r.shift}</td><td>{PROD_NAME[r.product] || r.product}</td><td>{r.thickness} MM</td>
+                  <td>{PROD_TYPE_LABEL[r.prod_type] || r.prod_type}</td>
+                  <td>{nf(r.pcs, 0)}</td><td>{nf(r.fa)}</td><td>{nf(r.na)}</td><td>{nf(r.cbm, 3)}</td><td>{nf(r.glue)}</td>
                 </tr>
               ))}
             </tbody>
