@@ -10,7 +10,7 @@ import {
 import { supabase } from "../lib/supabaseClient";
 import { useMasterData } from "../hooks/useMasterData";
 import ComboBox from "../components/ui/ComboBox";
-import DailySheet from "./DailySheet";
+import DailySheet, { useEnrichedProduction, PROD_TYPES, localDateStr } from "./DailySheet";
 
 const DEPARTMENTS = ["Plywood", "Door", "Furniture"];
 const SHIFTS = ["Shift 1 (6AM-2PM)", "Shift 2 (2PM-10PM)", "Shift 3 (10PM-6AM)"];
@@ -49,48 +49,6 @@ function pct(actual, target) {
 
 export default function Production({ currentUser }) {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [targets, setTargets] = useState([]);
-  const [stages, setStages] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    const [tRes, sRes, lRes] = await Promise.all([
-      supabase.from("target_master").select("*").order("department").order("product").order("stage"),
-      supabase.from("stage_master").select("*").order("department").order("sequence"),
-      supabase.from("production_log").select("*").order("entry_date", { ascending: false }).order("created_at", { ascending: false }),
-    ]);
-    if (tRes.error) setError(tRes.error.message);
-    else setTargets(tRes.data || []);
-    if (sRes.error) setError(sRes.error.message);
-    else setStages(sRes.data || []);
-    if (lRes.error) setError(lRes.error.message);
-    else setLogs(lRes.data || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  function findTarget(department, product, stage) {
-    return targets.find((t) => t.department === department && t.product === product && t.stage === stage);
-  }
-
-  // one row per log entry, enriched with its target/capacity/unit + calculations
-  const joinedRows = useMemo(() => {
-    return logs.map((l) => {
-      const t = findTarget(l.department, l.product, l.stage);
-      const target = t?.daily_target || 0;
-      const capacity = t?.capacity_8hr || 0;
-      const unit = t?.unit || "";
-      const balance = Number(l.actual_qty) - target;
-      const achievement = pct(l.actual_qty, target);
-      return { ...l, capacity, target, unit, balance, achievement };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logs, targets]);
 
   return (
     <div className="prod-root">
@@ -113,103 +71,74 @@ export default function Production({ currentUser }) {
         ))}
       </div>
 
-      {error && <div className="prod-error">{error}</div>}
-
-      {loading ? (
-        <div className="prod-loading"><Loader2 size={24} className="prod-spin" /></div>
-      ) : (
-        <>
-          {activeTab === "dashboard" && <DashboardTab joinedRows={joinedRows} targets={targets} />}
-          {activeTab === "daily" && <DailySheet currentUser={currentUser} />}
-        </>
-      )}
+      {activeTab === "dashboard" && <DashboardTab />}
+      {activeTab === "daily" && <DailySheet currentUser={currentUser} />}
     </div>
   );
 }
 
 /* ============================== DASHBOARD ============================== */
-function DashboardTab({ joinedRows, targets }) {
-  const [fromDate, setFromDate] = useState(todayStr());
-  const [toDate, setToDate] = useState(todayStr());
+// Built from the Daily Sheet data: PCS, F.A., N.A., CBM and Glueline (no targets any more).
+const PROD_NAME = { BB: "Block Board", FD: "Flush Door", PLY: "Plywood" };
+const PROD_TYPE_LABEL = Object.fromEntries(PROD_TYPES.map((t) => [t.id, t.label]));
+const nf = (n, d = 2) => Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: d });
+
+function DashboardTab() {
+  const { enriched, loading, error } = useEnrichedProduction();
+  const [fromDate, setFromDate] = useState(localDateStr());
+  const [toDate, setToDate] = useState(localDateStr());
   const [filterProduct, setFilterProduct] = useState("");
+  const [filterShift, setFilterShift] = useState("");
 
-  const productList = useMemo(() => [...new Set(joinedRows.map((r) => r.product))], [joinedRows]);
+  const inRange = (r) => (!fromDate || r.entry_date >= fromDate) && (!toDate || r.entry_date <= toDate);
+  const matches = (r) => (!filterProduct || r.product === filterProduct) && (!filterShift || r.shift === filterShift);
 
-  const filtered = useMemo(() => {
-    return joinedRows.filter((r) => {
-      if (fromDate && r.entry_date < fromDate) return false;
-      if (toDate && r.entry_date > toDate) return false;
-      if (filterProduct && r.product !== filterProduct) return false;
-      return true;
-    });
-  }, [joinedRows, fromDate, toDate, filterProduct]);
+  const filtered = useMemo(() => enriched.filter((r) => inRange(r) && matches(r)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [enriched, fromDate, toDate, filterProduct, filterShift]);
 
-  const totals = useMemo(() => {
-    const target = filtered.reduce((s, r) => s + Number(r.target), 0);
-    const actual = filtered.reduce((s, r) => s + Number(r.actual_qty), 0);
-    const rejection = filtered.reduce((s, r) => s + Number(r.rejection_qty), 0);
-    const balance = actual - target;
-    const achievement = pct(actual, target);
-    return { target, actual, rejection, balance, achievement };
-  }, [filtered]);
+  const totals = useMemo(() => filtered.reduce((a, r) => ({
+    pcs: a.pcs + r.pcs, fa: a.fa + r.fa, na: a.na + r.na, cbm: a.cbm + r.cbm, glue: a.glue + r.glue,
+    day: a.day + (r.shift === "DAY" ? r.pcs : 0), night: a.night + (r.shift === "NIGHT" ? r.pcs : 0),
+    refacing: a.refacing + (/REFACING/.test(r.prod_type) ? r.pcs : 0),
+  }), { pcs: 0, fa: 0, na: 0, cbm: 0, glue: 0, day: 0, night: 0, refacing: 0 }), [filtered]);
 
   const byProduct = useMemo(() => {
-    const map = {};
+    const m = {};
     filtered.forEach((r) => {
-      if (!map[r.product]) map[r.product] = { target: 0, actual: 0 };
-      map[r.product].target += Number(r.target);
-      map[r.product].actual += Number(r.actual_qty);
+      const p = (m[r.product] ||= { product: PROD_NAME[r.product] || r.product, Day: 0, Night: 0 });
+      p[r.shift === "NIGHT" ? "Night" : "Day"] += r.pcs;
     });
-    return Object.entries(map)
-      .map(([product, v]) => ({ product, ...v, achievement: pct(v.actual, v.target) }))
-      .sort((a, b) => b.actual - a.actual);
+    return Object.values(m);
   }, [filtered]);
 
-  const byStage = useMemo(() => {
-    const map = {};
-    filtered.forEach((r) => {
-      const key = r.stage;
-      if (!map[key]) map[key] = { target: 0, actual: 0 };
-      map[key].target += Number(r.target);
-      map[key].actual += Number(r.actual_qty);
-    });
-    return Object.entries(map)
-      .map(([stage, v]) => ({ stage, ...v, balance: v.actual - v.target, achievement: pct(v.actual, v.target) }))
-      .sort((a, b) => b.actual - a.actual);
+  const byType = useMemo(() => {
+    const m = {};
+    filtered.forEach((r) => { m[r.prod_type] = (m[r.prod_type] || 0) + r.pcs; });
+    return Object.entries(m).map(([k, v]) => ({ type: PROD_TYPE_LABEL[k] || k, PCS: v })).sort((a, b) => b.PCS - a.PCS);
   }, [filtered]);
 
-  const lowestStage = useMemo(() => {
-    const withAch = byStage.filter((s) => s.achievement !== null);
-    if (withAch.length === 0) return null;
-    return withAch.reduce((min, s) => (s.achievement < min.achievement ? s : min));
-  }, [byStage]);
+  const byBlock = useMemo(() => {
+    const m = {};
+    filtered.forEach((r) => {
+      const k = `${r.product}|${r.thickness}`;
+      const t = (m[k] ||= { key: k, product: r.product, thickness: r.thickness, pcs: 0, fa: 0, na: 0, cbm: 0, glue: 0 });
+      t.pcs += r.pcs; t.fa += r.fa; t.na += r.na; t.cbm += r.cbm; t.glue += r.glue;
+    });
+    return Object.values(m).sort((a, b) => a.product.localeCompare(b.product) || a.thickness - b.thickness);
+  }, [filtered]);
 
-  // last 14 days trend — independent of the single-date filter (respects product filter only)
+  // last 14 days (product/shift filters apply, date range does not)
   const trendData = useMemo(() => {
     const days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      days.push(d.toISOString().split("T")[0]);
-    }
-    const byDate = {};
-    days.forEach((d) => { byDate[d] = { target: 0, actual: 0 }; });
-    joinedRows.forEach((r) => {
-      if (filterProduct && r.product !== filterProduct) return;
-      if (byDate[r.entry_date]) {
-        byDate[r.entry_date].target += Number(r.target);
-        byDate[r.entry_date].actual += Number(r.actual_qty);
-      }
-    });
-    return days.map((d) => ({
-      date: d,
-      label: new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
-      ...byDate[d],
-    }));
-  }, [joinedRows, filterProduct]);
+    for (let i = 13; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push(localDateStr(d)); }
+    const m = {}; days.forEach((d) => { m[d] = { Day: 0, Night: 0 }; });
+    enriched.forEach((r) => { if (matches(r) && m[r.entry_date]) m[r.entry_date][r.shift === "NIGHT" ? "Night" : "Day"] += r.pcs; });
+    return days.map((d) => ({ label: new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }), ...m[d] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enriched, filterProduct, filterShift]);
 
-  const gaugeColor = totals.achievement === null ? "#c3c5d1" : totals.achievement >= 90 ? "#1a8a4c" : totals.achievement >= 75 ? "#f5a623" : "#c23c33";
-  const gaugeData = [{ value: Math.min(100, totals.achievement || 0), fill: gaugeColor }];
+  const quick = (from, to) => { setFromDate(from); setToDate(to); };
 
   return (
     <div>
@@ -219,204 +148,149 @@ function DashboardTab({ joinedRows, targets }) {
         .pd-quick-btn { border: 1px solid #e1e3ec; background: #fff; color: #5b5f72; border-radius: 10px; padding: 9px 13px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
         .pd-quick-btn:hover { background: #f6f7fb; border-color: #f5a623; color: #b5620f; }
         .pd-filters input, .pd-filters select { border: 1px solid #e1e3ec; border-radius: 10px; padding: 9px 12px; font-size: 13px; background: #fff; }
-
-        .pd-top-grid { display: grid; grid-template-columns: 220px 1fr; gap: 16px; margin-bottom: 20px; }
+        .pd-top-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; margin-bottom: 20px; }
         @media (max-width: 900px) { .pd-top-grid { grid-template-columns: 1fr; } }
-
-        .pd-gauge-card { background: #fff; border: 1px solid #eceef4; border-radius: 18px; padding: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
-        .pd-gauge-wrap { position: relative; width: 160px; height: 160px; }
-        .pd-gauge-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .pd-gauge-pct { font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 800; }
-        .pd-gauge-label { font-size: 10px; text-transform: uppercase; color: #9295a8; font-weight: 700; letter-spacing: 0.04em; margin-top: 2px; }
-        .pd-gauge-title { font-size: 11px; font-weight: 700; color: #5b5f72; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 12px; }
-
+        .pd-big { background: #14161f; color: #fff; border-radius: 18px; padding: 22px; display: flex; flex-direction: column; justify-content: center; }
+        .pd-big-label { font-size: 11px; text-transform: uppercase; color: #ffcd80; font-weight: 700; letter-spacing: 0.04em; }
+        .pd-big-value { font-family: 'Space Grotesk', sans-serif; font-size: 40px; font-weight: 800; margin: 6px 0 10px; }
+        .pd-big-sub { font-size: 12.5px; color: #a7abc0; line-height: 1.7; }
         .pd-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
         @media (max-width: 500px) { .pd-cards { grid-template-columns: 1fr; } }
-        .pd-card {
-          background: #fff; border: 1px solid #eceef4; border-radius: 16px; padding: 16px 18px;
-          position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px;
-        }
+        .pd-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
         .pd-card-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .pd-card-label { font-size: 10px; text-transform: uppercase; color: #9295a8; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 3px; }
         .pd-card-value { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 800; }
-
-        .pd-bottleneck {
-          background: linear-gradient(135deg, #14161f, #1e2130); color: #fff; border-radius: 16px;
-          padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: center; gap: 14px;
-        }
-        .pd-bottleneck-icon { width: 40px; height: 40px; border-radius: 12px; background: rgba(245,166,35,0.18); color: #ffcd80; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .pd-bottleneck-title { font-size: 10.5px; text-transform: uppercase; color: #ffcd80; font-weight: 700; letter-spacing: 0.04em; margin-bottom: 3px; }
-        .pd-bottleneck-value { font-size: 14px; font-weight: 700; }
-        .pd-bottleneck-sub { font-size: 12px; color: #a7abc0; margin-top: 2px; }
-
         .pd-section-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 14.5px; margin: 4px 0 12px 0; display: flex; align-items: center; gap: 8px; }
         .pd-chart-card { background: #fff; border: 1px solid #eceef4; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
-
         .pd-charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 4px; }
         @media (max-width: 900px) { .pd-charts-grid { grid-template-columns: 1fr; } }
-
         .pd-stage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        .pd-stage-table thead th { background: #14161f; color: #fff; text-align: left; padding: 10px 14px; font-size: 10.5px; text-transform: uppercase; }
-        .pd-stage-table tbody td { padding: 10px 14px; border-bottom: 1px solid #f0f1f6; }
+        .pd-stage-table thead th { background: #14161f; color: #fff; text-align: right; padding: 10px 14px; font-size: 10.5px; text-transform: uppercase; }
+        .pd-stage-table thead th:first-child, .pd-stage-table tbody td:first-child { text-align: left; }
+        .pd-stage-table tbody td { padding: 10px 14px; border-bottom: 1px solid #f0f1f6; text-align: right; }
         .pd-stage-table tbody tr:last-child td { border-bottom: none; }
-        .pd-achievement-low { color: #c23c33; font-weight: 700; }
-        .pd-achievement-ok { color: #1a8a4c; font-weight: 700; }
-        .pd-card-table { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: hidden; }
+        .pd-card-table { background: #fff; border: 1px solid #eceef4; border-radius: 16px; overflow: auto; }
         .pd-empty { text-align: center; color: #b7b9c6; padding: 30px; }
       `}</style>
 
+      {error && <div className="prod-error">{error}</div>}
+
       <div className="pd-filters">
-        <div className="pd-filter-item">
-          <label className="pd-filter-label">From</label>
-          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-        </div>
-        <div className="pd-filter-item">
-          <label className="pd-filter-label">To</label>
-          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-        </div>
-        <button className="pd-quick-btn" onClick={() => { setFromDate(todayStr()); setToDate(todayStr()); }}>Today</button>
-        <button className="pd-quick-btn" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 6); setFromDate(d.toISOString().split("T")[0]); setToDate(todayStr()); }}>Last 7 Days</button>
-        <button className="pd-quick-btn" onClick={() => { setFromDate(monthStr() + "-01"); setToDate(todayStr()); }}>This Month</button>
+        <div className="pd-filter-item"><label className="pd-filter-label">From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} /></div>
+        <div className="pd-filter-item"><label className="pd-filter-label">To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} /></div>
+        <button className="pd-quick-btn" onClick={() => quick(localDateStr(), localDateStr())}>Today</button>
+        <button className="pd-quick-btn" onClick={() => { const d = new Date(); d.setDate(d.getDate() - 6); quick(localDateStr(d), localDateStr()); }}>Last 7 Days</button>
+        <button className="pd-quick-btn" onClick={() => quick(localDateStr().slice(0, 7) + "-01", localDateStr())}>This Month</button>
         <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
           <option value="">All Products</option>
-          {productList.map((p) => <option key={p} value={p}>{p}</option>)}
+          {Object.entries(PROD_NAME).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <select value={filterShift} onChange={(e) => setFilterShift(e.target.value)}>
+          <option value="">Day + Night</option><option value="DAY">Day</option><option value="NIGHT">Night</option>
         </select>
       </div>
 
-      <div className="pd-top-grid">
-        <div className="pd-gauge-card">
-          <div className="pd-gauge-wrap">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadialBarChart innerRadius="72%" outerRadius="100%" data={gaugeData} startAngle={90} endAngle={-270}>
-                <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
-                <RadialBar dataKey="value" cornerRadius={20} background={{ fill: "#f1f2f6" }} angleAxisId={0} />
-              </RadialBarChart>
-            </ResponsiveContainer>
-            <div className="pd-gauge-center">
-              <div className="pd-gauge-pct" style={{ color: gaugeColor }}>{totals.achievement === null ? "-" : `${totals.achievement.toFixed(0)}%`}</div>
-              <div className="pd-gauge-label">Achieved</div>
+      {loading ? (
+        <div className="prod-loading"><Loader2 size={24} className="prod-spin" /></div>
+      ) : (
+        <>
+          <div className="pd-top-grid">
+            <div className="pd-big">
+              <div className="pd-big-label">Total Production (PCS)</div>
+              <div className="pd-big-value">{nf(totals.pcs, 0)}</div>
+              <div className="pd-big-sub">
+                Day: {nf(totals.day, 0)} pcs<br />
+                Night: {nf(totals.night, 0)} pcs<br />
+                Refacing: {nf(totals.refacing, 0)} pcs
+              </div>
+            </div>
+            <div className="pd-cards">
+              <div className="pd-card">
+                <div className="pd-card-icon" style={{ background: "#eafaf1", color: "#1a8a4c" }}><Table2 size={18} /></div>
+                <div><div className="pd-card-label">F.A.</div><div className="pd-card-value" style={{ color: "#1a8a4c" }}>{nf(totals.fa)}</div></div>
+              </div>
+              <div className="pd-card">
+                <div className="pd-card-icon" style={{ background: "#e8f1ff", color: "#1d5fc7" }}><Table2 size={18} /></div>
+                <div><div className="pd-card-label">N.A.</div><div className="pd-card-value" style={{ color: "#1d5fc7" }}>{nf(totals.na)}</div></div>
+              </div>
+              <div className="pd-card">
+                <div className="pd-card-icon" style={{ background: "#f3e8ff", color: "#8b3fd6" }}><Table2 size={18} /></div>
+                <div><div className="pd-card-label">C.B.M.</div><div className="pd-card-value" style={{ color: "#8b3fd6" }}>{nf(totals.cbm, 3)}</div></div>
+              </div>
+              <div className="pd-card">
+                <div className="pd-card-icon" style={{ background: "#fff4de", color: "#b5620f" }}><Table2 size={18} /></div>
+                <div><div className="pd-card-label">Glueline</div><div className="pd-card-value" style={{ color: "#b5620f" }}>{nf(totals.glue)}</div></div>
+              </div>
             </div>
           </div>
-          <div className="pd-gauge-title">Overall Achievement</div>
-        </div>
 
-        <div className="pd-cards">
-          <div className="pd-card">
-            <div className="pd-card-icon" style={{ background: "#f1f2f6", color: "#5b5f72" }}><Table2 size={18} /></div>
-            <div><div className="pd-card-label">Target</div><div className="pd-card-value">{totals.target}</div></div>
+          <div className="pd-section-title"><TrendingUp size={16} /> 14-Day Production (PCS) {filterProduct ? `— ${PROD_NAME[filterProduct]}` : ""}</div>
+          <div className="pd-chart-card">
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={trendData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 10.5 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="Day" stackId="1" stroke="#f5a623" strokeWidth={2} fill="#f5a623" fillOpacity={0.25} />
+                <Area type="monotone" dataKey="Night" stackId="1" stroke="#1d5fc7" strokeWidth={2} fill="#1d5fc7" fillOpacity={0.25} />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
-          <div className="pd-card">
-            <div className="pd-card-icon" style={{ background: "#eafaf1", color: "#1a8a4c" }}><CheckIcon /></div>
-            <div><div className="pd-card-label">Actual Production</div><div className="pd-card-value" style={{ color: "#1a8a4c" }}>{totals.actual}</div></div>
-          </div>
-          <div className="pd-card">
-            <div className="pd-card-icon" style={{ background: totals.balance < 0 ? "#fdeceb" : "#eafaf1", color: totals.balance < 0 ? "#c23c33" : "#1a8a4c" }}><AlertTriangle size={18} /></div>
-            <div><div className="pd-card-label">Balance</div><div className="pd-card-value" style={{ color: totals.balance < 0 ? "#c23c33" : "#1a8a4c" }}>{totals.balance > 0 ? `+${totals.balance}` : totals.balance}</div></div>
-          </div>
-          <div className="pd-card">
-            <div className="pd-card-icon" style={{ background: "#fdeceb", color: "#c23c33" }}><Trash2 size={18} /></div>
-            <div><div className="pd-card-label">Total Rejection</div><div className="pd-card-value" style={{ color: "#c23c33" }}>{totals.rejection}</div></div>
-          </div>
-        </div>
-      </div>
 
-      {lowestStage && lowestStage.achievement < 90 && (
-        <div className="pd-bottleneck">
-          <div className="pd-bottleneck-icon"><AlertTriangle size={18} /></div>
-          <div>
-            <div className="pd-bottleneck-title">Bottleneck Stage</div>
-            <div className="pd-bottleneck-value">{lowestStage.stage} — {lowestStage.achievement.toFixed(1)}% achievement</div>
-            <div className="pd-bottleneck-sub">{lowestStage.actual} / {lowestStage.target} — this stage needs attention</div>
+          <div className="pd-charts-grid">
+            <div>
+              <div className="pd-section-title"><BarChart3 size={16} /> Product-wise PCS (Day vs Night)</div>
+              <div className="pd-chart-card">
+                {byProduct.length === 0 ? <div className="pd-empty">No production entered for this filter yet.</div> : (
+                  <ResponsiveContainer width="100%" height={Math.max(180, byProduct.length * 60)}>
+                    <BarChart data={byProduct} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }} barGap={4}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 11 }} />
+                      <YAxis type="category" dataKey="product" tick={{ fontSize: 11 }} width={100} />
+                      <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="Day" fill="#f5a623" radius={[0, 6, 6, 0]} barSize={14} />
+                      <Bar dataKey="Night" fill="#1d5fc7" radius={[0, 6, 6, 0]} barSize={14} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+            <div>
+              <div className="pd-section-title"><BarChart3 size={16} /> PCS by Production Type</div>
+              <div className="pd-chart-card">
+                {byType.length === 0 ? <div className="pd-empty">No production entered for this filter yet.</div> : (
+                  <ResponsiveContainer width="100%" height={Math.max(180, byType.length * 50)}>
+                    <BarChart data={byType} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 11 }} />
+                      <YAxis type="category" dataKey="type" tick={{ fontSize: 10.5 }} width={120} />
+                      <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
+                      <Bar dataKey="PCS" fill="#1a8a4c" radius={[0, 6, 6, 0]} barSize={16} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+
+          <div className="pd-section-title"><Table2 size={16} /> Block-wise Detail</div>
+          <div className="pd-card-table">
+            {byBlock.length === 0 ? <div className="pd-empty">No production entered for this filter yet.</div> : (
+              <table className="pd-stage-table">
+                <thead><tr><th>Block</th><th>PCS</th><th>F.A.</th><th>N.A.</th><th>C.B.M.</th><th>Glueline</th></tr></thead>
+                <tbody>
+                  {byBlock.map((b) => (
+                    <tr key={b.key}><td>{b.thickness} MM {b.product}</td><td>{nf(b.pcs, 0)}</td><td>{nf(b.fa)}</td><td>{nf(b.na)}</td><td>{nf(b.cbm, 3)}</td><td>{nf(b.glue)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
       )}
-
-      <div className="pd-section-title"><TrendingUp size={16} /> 14-Day Production Trend {filterProduct ? `— ${filterProduct}` : ""}</div>
-      <div className="pd-chart-card">
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={trendData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-            <defs>
-              <linearGradient id="pdActualGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#1a8a4c" stopOpacity={0.35} />
-                <stop offset="95%" stopColor="#1a8a4c" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" vertical={false} />
-            <XAxis dataKey="label" tick={{ fontSize: 10.5 }} />
-            <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Line type="monotone" dataKey="target" name="Target" stroke="#c3c5d1" strokeWidth={2} strokeDasharray="5 4" dot={false} />
-            <Area type="monotone" dataKey="actual" name="Actual" stroke="#1a8a4c" strokeWidth={2.5} fill="url(#pdActualGradient)" dot={{ r: 3 }} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="pd-charts-grid">
-        <div>
-          <div className="pd-section-title"><BarChart3 size={16} /> Product-wise (Target vs Actual)</div>
-          <div className="pd-chart-card">
-            {byProduct.length === 0 ? (
-              <div className="pd-empty">No production logged for this filter yet.</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={Math.max(180, byProduct.length * 46)}>
-                <BarChart data={byProduct} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }} barGap={4}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="product" tick={{ fontSize: 11 }} width={90} />
-                  <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="target" name="Target" fill="#dfe1e8" radius={[0, 6, 6, 0]} barSize={14} />
-                  <Bar dataKey="actual" name="Actual" fill="#1a8a4c" radius={[0, 6, 6, 0]} barSize={14} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <div className="pd-section-title"><BarChart3 size={16} /> Stage-wise (Target vs Actual)</div>
-          <div className="pd-chart-card">
-            {byStage.length === 0 ? (
-              <div className="pd-empty">No production logged for this filter yet.</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={Math.max(180, byStage.length * 46)}>
-                <BarChart data={byStage} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }} barGap={4}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f1f6" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="stage" tick={{ fontSize: 10.5 }} width={110} />
-                  <Tooltip contentStyle={{ borderRadius: 10, fontSize: 12, border: "1px solid #eceef4" }} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="target" name="Target" fill="#dfe1e8" radius={[0, 6, 6, 0]} barSize={14} />
-                  <Bar dataKey="actual" name="Actual" fill="#f5a623" radius={[0, 6, 6, 0]} barSize={14} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="pd-section-title"><Table2 size={16} /> Stage-wise Detail</div>
-      <div className="pd-card-table">
-        {byStage.length === 0 ? (
-          <div className="pd-empty">No production logged for this filter yet.</div>
-        ) : (
-          <table className="pd-stage-table">
-            <thead><tr><th>Stage</th><th>Target</th><th>Actual</th><th>Balance</th><th>Achievement %</th></tr></thead>
-            <tbody>
-              {byStage.map((s) => (
-                <tr key={s.stage}>
-                  <td>{s.stage}</td><td>{s.target}</td><td>{s.actual}</td>
-                  <td className={s.balance < 0 ? "pd-achievement-low" : "pd-achievement-ok"}>{s.balance > 0 ? `+${s.balance}` : s.balance}</td>
-                  <td className={s.achievement !== null && s.achievement < 90 ? "pd-achievement-low" : "pd-achievement-ok"}>
-                    {s.achievement === null ? "-" : `${s.achievement.toFixed(1)}%`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 }

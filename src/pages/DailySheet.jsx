@@ -15,7 +15,12 @@ export const PROD_TYPES = [
 ];
 const SHIFT_OPTIONS = ["DAY", "NIGHT"];
 
-function todayStr() { return new Date().toISOString().split("T")[0]; }
+// local (India) date, not UTC, so entries after midnight still land on the right day
+export function localDateStr(d = new Date()) {
+  const z = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+}
+function todayStr() { return localDateStr(); }
 const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const fmt = (n, d = 2) => Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: d });
 
@@ -52,6 +57,33 @@ export async function fetchDailyProduction(from, to) {
     if (!data || data.length < PAGE) break;
   }
   return { data: out, error: null };
+}
+
+// All saved production with F.A./N.A./CBM/Glueline worked out (used by Dashboard).
+export function useEnrichedProduction() {
+  const [rows, setRows] = useState([]);
+  const [custom, setCustom] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    (async () => {
+      setLoading(true); setError("");
+      const [p, c] = await Promise.all([fetchDailyProduction(), supabase.from("production_custom_sizes").select("*")]);
+      if (p.error) setError(p.error.message);
+      setRows(p.data || []); setCustom(c.data || []); setLoading(false);
+    })();
+  }, []);
+  const enriched = useMemo(() => {
+    const dims = {};
+    BASE_BLOCKS.forEach((b) => b.sizes.forEach((x) => { dims[`${b.product}|${Number(b.thickness)}|${x.size}`] = x; }));
+    custom.forEach((x) => { dims[`${x.product}|${Number(x.thickness)}|${x.size}`] = { l: Number(x.l), w: Number(x.w) }; });
+    return rows.map((r) => {
+      const d = dims[`${r.product}|${Number(r.thickness)}|${r.size}`];
+      if (!d) return null;
+      return { ...r, thickness: Number(r.thickness), ...calc(r.product, Number(r.thickness), d.l, d.w, r.pcs, r.prod_type) };
+    }).filter(Boolean);
+  }, [rows, custom]);
+  return { enriched, loading, error };
 }
 
 const zero = () => ({ pcs: 0, fa: 0, na: 0, cbm: 0, glue: 0 });
